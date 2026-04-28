@@ -15,14 +15,13 @@ services:
         unset ROS_DISTRO
         source /opt/ros/foxy/setup.bash
         source /bridge_ws/install/setup.bash
-        exec ros2 run ros1_bridge dynamic_bridge
+        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
     networks:
       field_net:
         ipv4_address: 10.68.0.52
     environment:
       - ROS_MASTER_URI=http://10.68.0.1:11311
       - ROS_IP=10.68.0.52
-      #- ROS_HOSTNAME=tiago-218c
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 networks:
