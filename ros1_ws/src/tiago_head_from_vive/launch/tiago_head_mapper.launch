@@ -1,18 +1,22 @@
 <launch>
   <!-- Subscribe to bridged Vive pose on ROS 1 master; command TIAGO head. -->
   <arg name="input_pose_topic" default="/vive/head_pose" />
-  <arg name="output_joint_trajectory_topic" default="/head_controller/joint_trajectory" />
+  <arg name="output_command_topic" default="/head_controller/command" />
+  <arg name="output_mode" default="float64_multi_array" />
   <arg name="start_enabled" default="false" />
 
   <node pkg="tiago_head_from_vive" type="tiago_head_mapper" name="tiago_head_mapper" output="screen">
     <param name="input_pose_topic" value="$(arg input_pose_topic)" />
-    <param name="output_joint_trajectory_topic" value="$(arg output_joint_trajectory_topic)" />
+    <param name="output_command_topic" value="$(arg output_command_topic)" />
+    <param name="output_mode" value="$(arg output_mode)" />
     <param name="start_enabled" value="$(arg start_enabled)" />
     <!-- Safety: keep disabled until you publish True to ~/enabled -->
     <param name="limit_yaw_rad" value="1.25" />
     <param name="limit_pitch_rad" value="0.95" />
     <param name="smoothing_alpha" value="0.25" />
     <param name="deadband_rad" value="0.02" />
+    <param name="max_rate_rad_s" value="2.0" />
+    <param name="pose_timeout_s" value="0.5" />
     <param name="invert_pitch" value="true" />
     <param name="invert_yaw" value="false" />
   </node>

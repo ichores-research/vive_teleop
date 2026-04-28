@@ -9,7 +9,7 @@ ROS **ROS 2 → `ros1_bridge` → ROS 1** pipeline for **HTC Vive Pro** head tra
 | [`bridge/Dockerfile`](bridge/Dockerfile) | Ubuntu 20.04 image: Noetic + Foxy, `ros1_bridge`, OpenVR, `vive_head_pose` (ROS 2), `tiago_head_from_vive` (ROS 1) |
 | [`docker-compose.yml`](docker-compose.yml) | Runs `dynamic_bridge --bridge-all-topics` toward the TIAGO ROS master |
 | [`ros2_ws/src/vive_head_pose`](ros2_ws/src/vive_head_pose) | OpenVR node publishing `geometry_msgs/PoseStamped` on `/vive/head_pose` |
-| [`ros1_ws/src/tiago_head_from_vive`](ros1_ws/src/tiago_head_from_vive) | Maps pose → `trajectory_msgs/JointTrajectory` on `/head_controller/joint_trajectory` |
+| [`ros1_ws/src/tiago_head_from_vive`](ros1_ws/src/tiago_head_from_vive) | Maps pose → head commands (default `std_msgs/Float64MultiArray` on `/head_controller/command`, optional `JointTrajectory`) |
 | [`docs/VR_RUNTIME.md`](docs/VR_RUNTIME.md) | SteamVR, lighthouses, DDS notes |
 | [`docs/VALIDATION.md`](docs/VALIDATION.md) | Staged checks before enabling motion |
 
@@ -85,7 +85,23 @@ Then return your head to neutral; the next pose sample becomes zero yaw/pitch.
 
 ### Controller topic compatibility
 
-This repo publishes **`trajectory_msgs/JointTrajectory`** to `/head_controller/joint_trajectory`. Your TIAGO/PAL stack might instead expose `/head_controller/command` or an action interface—adjust the mapper output in [`scripts/tiago_head_mapper`](ros1_ws/src/tiago_head_from_vive/scripts/tiago_head_mapper) if your deployment differs.
+Default mapper output is **`std_msgs/Float64MultiArray`** to `/head_controller/command`.
+The payload is `[head_1_joint, head_2_joint]` positions in radians.
+
+If your stack uses trajectories instead, launch with:
+
+```bash
+roslaunch tiago_head_from_vive tiago_head_mapper.launch \
+  output_mode:=joint_trajectory \
+  output_command_topic:=/head_controller/joint_trajectory
+```
+
+Before enabling motion on a new robot image, detect the real command interface:
+
+```bash
+rostopic info /head_controller/command
+rostopic type /head_controller/command
+```
 
 ## Parameters (mapper highlights)
 

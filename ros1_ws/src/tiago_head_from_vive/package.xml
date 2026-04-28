@@ -2,7 +2,7 @@
 <package format="2">
   <name>tiago_head_from_vive</name>
   <version>0.1.0</version>
-  <description>Maps bridged Vive head PoseStamped to TIAGO head joint trajectories (ROS 1).</description>
+  <description>Maps bridged Vive head PoseStamped to TIAGO head position commands (ROS 1).</description>
   <maintainer email="todo@example.com">vive_teleop</maintainer>
   <license>BSD</license>
 

@@ -12,6 +12,11 @@ This stack reads headset pose through **OpenVR**, which requires the **SteamVR**
 1. Install **Steam** (native `.deb`, not Flatpak/Snap if you want fewer USB/runtime issues).
 2. Install **SteamVR** from the Steam library.
 3. Complete **room setup** and ensure the HMD is tracked (green in SteamVR).
+4. Install Python OpenVR bindings used by the ROS 2 nodes:
+
+```bash
+python3 -m pip install --user openvr
+```
 
 ## Linux udev (USB devices)
 
@@ -32,3 +37,34 @@ If discovery fails across subnets/VLANs, align `CYCLONEDDS_URI` or use `ROS_LOCA
 **Recommended:** run `vive_head_pose` on the **same PC as SteamVR** (GPU + USB + runtime). Running SteamVR inside Docker is possible but fragile; the provided Docker image mainly supports CI/build and advanced users who mount SteamVR paths and devices explicitly.
 
 See [README.md](../README.md) for compose profiles and host-run examples.
+
+## Quick stability verification
+
+After launching `vive_head_pose`, confirm both signal presence and update rate:
+
+```bash
+ros2 topic echo /vive/head_pose --no-arr
+ros2 topic hz /vive/head_pose
+```
+
+A steady publish rate (near your `rate_hz` parameter) and smoothly changing poses indicate tracking/runtime are healthy.
+
+## One-command headset diagnostics
+
+From repo root, run:
+
+```bash
+bash check_vive_headset.sh
+```
+
+Optional arguments:
+
+```bash
+bash check_vive_headset.sh <sample_count> <sample_sleep_ms>
+```
+
+The script builds `vive_head_pose` if needed, then runs a diagnostic executable that:
+- checks whether OpenVR initializes,
+- detects the HMD,
+- prints model/manufacturer/serial/tracking system/battery (if available),
+- samples pose validity and position.

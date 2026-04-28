@@ -7,6 +7,7 @@ from __future__ import division
 import rospy
 import tf.transformations as tft
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Float64MultiArray
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger, TriggerResponse
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -21,8 +22,8 @@ class TiagoHeadMapper(object):
         rospy.init_node('tiago_head_mapper')
 
         self._pose_topic = rospy.get_param('~input_pose_topic', '/vive/head_pose')
-        self._cmd_topic = rospy.get_param(
-            '~output_joint_trajectory_topic', '/head_controller/joint_trajectory')
+        self._output_mode = rospy.get_param('~output_mode', 'float64_multi_array').strip()
+        self._cmd_topic = rospy.get_param('~output_command_topic', '/head_controller/command')
         self._joint_names = rospy.get_param(
             '~joint_names', ['head_1_joint', 'head_2_joint'])
 
@@ -36,21 +37,35 @@ class TiagoHeadMapper(object):
         self._deadband = float(rospy.get_param('~deadband_rad', 0.02))
         self._smooth = float(rospy.get_param('~smoothing_alpha', 0.25))
         self._traj_time_s = float(rospy.get_param('~trajectory_time_s', 0.15))
+        self._max_rate = float(rospy.get_param('~max_rate_rad_s', 2.0))
+        self._pose_timeout_s = float(rospy.get_param('~pose_timeout_s', 0.5))
 
         self._enabled = bool(rospy.get_param('~start_enabled', False))
 
         self._q_ref = None  # calibration reference quaternion [x,y,z,w]
         self._filt_yaw = 0.0
         self._filt_pitch = 0.0
+        self._last_cmd_yaw = 0.0
+        self._last_cmd_pitch = 0.0
+        self._last_pose_time = None
+        self._last_cmd_time = None
 
-        self._pub = rospy.Publisher(self._cmd_topic, JointTrajectory, queue_size=1)
+        if self._output_mode == 'joint_trajectory':
+            self._pub = rospy.Publisher(self._cmd_topic, JointTrajectory, queue_size=1)
+        elif self._output_mode == 'float64_multi_array':
+            self._pub = rospy.Publisher(self._cmd_topic, Float64MultiArray, queue_size=1)
+        else:
+            raise rospy.ROSInitException(
+                'Unsupported ~output_mode {} (supported: joint_trajectory, float64_multi_array)'.format(
+                    self._output_mode))
         rospy.Subscriber(self._pose_topic, PoseStamped, self._on_pose, queue_size=1)
         rospy.Subscriber('~enabled', Bool, self._on_enabled, queue_size=1)
 
         rospy.Service('~calibrate', Trigger, self._on_calibrate)
+        self._watchdog = rospy.Timer(rospy.Duration(0.1), self._on_watchdog)
 
-        rospy.loginfo('tiago_head_mapper: input=%s output=%s enabled=%s',
-                      self._pose_topic, self._cmd_topic, self._enabled)
+        rospy.loginfo('tiago_head_mapper: input=%s output=%s mode=%s enabled=%s',
+                      self._pose_topic, self._cmd_topic, self._output_mode, self._enabled)
 
     def _on_enabled(self, msg):
         self._enabled = bool(msg.data)
@@ -62,9 +77,46 @@ class TiagoHeadMapper(object):
         rospy.logwarn('tiago_head_mapper: calibration armed — move head to neutral, next pose will latch.')
         return TriggerResponse(success=True, message='Calibration will latch on next pose.')
 
+    def _on_watchdog(self, _event):
+        if not self._enabled or self._last_pose_time is None:
+            return
+        age = (rospy.Time.now() - self._last_pose_time).to_sec()
+        if age > self._pose_timeout_s:
+            rospy.logwarn_throttle(
+                1.0,
+                'tiago_head_mapper: pose timeout %.3fs > %.3fs; holding commands',
+                age,
+                self._pose_timeout_s)
+
+    def _publish_command(self, yaw_cmd, pitch_cmd):
+        if self._output_mode == 'joint_trajectory':
+            msg = JointTrajectory()
+            msg.header.stamp = rospy.Time.now()
+            msg.joint_names = list(self._joint_names)
+            pt = JointTrajectoryPoint()
+            pt.positions = [float(yaw_cmd), float(pitch_cmd)]
+            pt.time_from_start = rospy.Duration(self._traj_time_s)
+            msg.points = [pt]
+            self._pub.publish(msg)
+            return
+
+        cmd = Float64MultiArray()
+        cmd.data = [float(yaw_cmd), float(pitch_cmd)]
+        self._pub.publish(cmd)
+
     def _on_pose(self, msg):
+        self._last_pose_time = rospy.Time.now()
         if not self._enabled:
             return
+
+        if msg.header.stamp != rospy.Time(0):
+            msg_age = (rospy.Time.now() - msg.header.stamp).to_sec()
+            if msg_age > self._pose_timeout_s:
+                rospy.logwarn_throttle(
+                    1.0,
+                    'tiago_head_mapper: stale pose sample %.3fs old; dropping',
+                    msg_age)
+                return
 
         q = msg.pose.orientation
         q_cur = [q.x, q.y, q.z, q.w]
@@ -77,8 +129,7 @@ class TiagoHeadMapper(object):
 
         q_ref_inv = tft.quaternion_inverse(self._q_ref)
         q_rel = tft.quaternion_multiply(q_ref_inv, q_cur)
-
-        roll, pitch, yaw = tft.euler_from_quaternion(q_rel, axes='rzyx')
+        _roll, pitch, yaw = tft.euler_from_quaternion(q_rel)
 
         if self._invert_yaw:
             yaw = -yaw
@@ -100,14 +151,21 @@ class TiagoHeadMapper(object):
         self._filt_yaw = (1.0 - a) * self._filt_yaw + a * yaw
         self._filt_pitch = (1.0 - a) * self._filt_pitch + a * pitch
 
-        jt = JointTrajectory()
-        jt.header.stamp = rospy.Time.now()
-        jt.joint_names = list(self._joint_names)
-        pt = JointTrajectoryPoint()
-        pt.positions = [float(self._filt_yaw), float(self._filt_pitch)]
-        pt.time_from_start = rospy.Duration(self._traj_time_s)
-        jt.points = [pt]
-        self._pub.publish(jt)
+        now = rospy.Time.now()
+        dt = 0.0 if self._last_cmd_time is None else max((now - self._last_cmd_time).to_sec(), 0.0)
+        max_step = self._max_rate * dt if dt > 0.0 else float('inf')
+
+        yaw_delta = self._filt_yaw - self._last_cmd_yaw
+        pitch_delta = self._filt_pitch - self._last_cmd_pitch
+        if abs(yaw_delta) > max_step:
+            self._filt_yaw = self._last_cmd_yaw + _clamp(yaw_delta, -max_step, max_step)
+        if abs(pitch_delta) > max_step:
+            self._filt_pitch = self._last_cmd_pitch + _clamp(pitch_delta, -max_step, max_step)
+
+        self._publish_command(self._filt_yaw, self._filt_pitch)
+        self._last_cmd_yaw = self._filt_yaw
+        self._last_cmd_pitch = self._filt_pitch
+        self._last_cmd_time = now
 
 
 def main():

@@ -27,17 +27,14 @@ RUN apt-get update && apt-get install -y \
     ros-foxy-ros-base \
     ros-foxy-demo-nodes-cpp \
     python3-colcon-common-extensions \
+    python3-pip \
     python3-rosdep \
     ros-foxy-rmw-cyclonedds-cpp \
     cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# OpenVR (SteamVR runtime must be running on the host for live tracking)
-RUN git clone --depth 1 https://github.com/ValveSoftware/openvr.git /tmp/openvr \
-    && mkdir -p /tmp/openvr/build && cd /tmp/openvr/build \
-    && cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local \
-    && cmake --build . --target install \
-    && rm -rf /tmp/openvr
+# Python OpenVR bindings for vive_head_pose scripts
+RUN pip3 install --no-cache-dir openvr
 
 WORKDIR /bridge_ws
 

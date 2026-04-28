@@ -40,7 +40,7 @@ On a ROS 1 machine connected to the same master:
 
 ```bash
 roslaunch tiago_head_from_vive tiago_head_mapper.launch start_enabled:=false
-rostopic echo /head_controller/joint_trajectory
+rostopic echo /head_controller/command
 ```
 
 Toggle enable only after verifying limits:
@@ -50,6 +50,15 @@ rostopic pub /tiago_head_mapper/enabled std_msgs/Bool "data: true" -1
 ```
 
 Watch proposed joint positions; **emergency stop** the robot if anything unexpected appears.
+
+Confirm the command topic type on your TIAGO image before enabling:
+
+```bash
+rostopic type /head_controller/command
+rostopic info /head_controller/command
+```
+
+If it is not `std_msgs/Float64MultiArray`, switch mapper output mode/topic accordingly.
 
 ## 5. Calibration
 
