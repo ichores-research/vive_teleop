@@ -1,7 +1,11 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-source /opt/ros/humble/setup.bash
-source /ros1_bridge_ws/install/setup.bash
+# Matches bridge/Dockerfile: Noetic + Foxy + ros1_bridge + vive_head_pose + tiago mapper workspace.
+source /opt/ros/noetic/setup.bash
+source /opt/ros/foxy/setup.bash
+source /bridge_ws/install/setup.bash
+source /ros2_vive_ws/install/setup.bash
+source /catkin_ws/devel/setup.bash
 
 exec "$@"

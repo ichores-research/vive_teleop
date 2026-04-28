@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+"""Map Vive head orientation (PoseStamped) to TIAGO head joint commands."""
+
+from __future__ import division
+
+import rospy
+import tf.transformations as tft
+from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Bool
+from std_srvs.srv import Trigger, TriggerResponse
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+
+def _clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+
+class TiagoHeadMapper(object):
+    def __init__(self):
+        rospy.init_node('tiago_head_mapper')
+
+        self._pose_topic = rospy.get_param('~input_pose_topic', '/vive/head_pose')
+        self._cmd_topic = rospy.get_param(
+            '~output_joint_trajectory_topic', '/head_controller/joint_trajectory')
+        self._joint_names = rospy.get_param(
+            '~joint_names', ['head_1_joint', 'head_2_joint'])
+
+        self._limit_yaw = float(rospy.get_param('~limit_yaw_rad', 1.25))
+        self._limit_pitch = float(rospy.get_param('~limit_pitch_rad', 0.95))
+        self._invert_yaw = bool(rospy.get_param('~invert_yaw', False))
+        self._invert_pitch = bool(rospy.get_param('~invert_pitch', True))
+        self._scale_yaw = float(rospy.get_param('~scale_yaw', 1.0))
+        self._scale_pitch = float(rospy.get_param('~scale_pitch', 1.0))
+
+        self._deadband = float(rospy.get_param('~deadband_rad', 0.02))
+        self._smooth = float(rospy.get_param('~smoothing_alpha', 0.25))
+        self._traj_time_s = float(rospy.get_param('~trajectory_time_s', 0.15))
+
+        self._enabled = bool(rospy.get_param('~start_enabled', False))
+
+        self._q_ref = None  # calibration reference quaternion [x,y,z,w]
+        self._filt_yaw = 0.0
+        self._filt_pitch = 0.0
+
+        self._pub = rospy.Publisher(self._cmd_topic, JointTrajectory, queue_size=1)
+        rospy.Subscriber(self._pose_topic, PoseStamped, self._on_pose, queue_size=1)
+        rospy.Subscriber('~enabled', Bool, self._on_enabled, queue_size=1)
+
+        rospy.Service('~calibrate', Trigger, self._on_calibrate)
+
+        rospy.loginfo('tiago_head_mapper: input=%s output=%s enabled=%s',
+                      self._pose_topic, self._cmd_topic, self._enabled)
+
+    def _on_enabled(self, msg):
+        self._enabled = bool(msg.data)
+        rospy.loginfo('tiago_head_mapper: enabled=%s', self._enabled)
+
+    def _on_calibrate(self, _req):
+        """Use next pose sample as neutral (call while looking straight at robot)."""
+        self._q_ref = None
+        rospy.logwarn('tiago_head_mapper: calibration armed — move head to neutral, next pose will latch.')
+        return TriggerResponse(success=True, message='Calibration will latch on next pose.')
+
+    def _on_pose(self, msg):
+        if not self._enabled:
+            return
+
+        q = msg.pose.orientation
+        q_cur = [q.x, q.y, q.z, q.w]
+
+        if self._q_ref is None:
+            self._q_ref = list(q_cur)
+            self._filt_yaw = 0.0
+            self._filt_pitch = 0.0
+            rospy.loginfo('tiago_head_mapper: calibrated reference orientation latched.')
+
+        q_ref_inv = tft.quaternion_inverse(self._q_ref)
+        q_rel = tft.quaternion_multiply(q_ref_inv, q_cur)
+
+        roll, pitch, yaw = tft.euler_from_quaternion(q_rel, axes='rzyx')
+
+        if self._invert_yaw:
+            yaw = -yaw
+        if self._invert_pitch:
+            pitch = -pitch
+
+        yaw *= self._scale_yaw
+        pitch *= self._scale_pitch
+
+        if abs(yaw) < self._deadband:
+            yaw = 0.0
+        if abs(pitch) < self._deadband:
+            pitch = 0.0
+
+        yaw = _clamp(yaw, -self._limit_yaw, self._limit_yaw)
+        pitch = _clamp(pitch, -self._limit_pitch, self._limit_pitch)
+
+        a = self._smooth
+        self._filt_yaw = (1.0 - a) * self._filt_yaw + a * yaw
+        self._filt_pitch = (1.0 - a) * self._filt_pitch + a * pitch
+
+        jt = JointTrajectory()
+        jt.header.stamp = rospy.Time.now()
+        jt.joint_names = list(self._joint_names)
+        pt = JointTrajectoryPoint()
+        pt.positions = [float(self._filt_yaw), float(self._filt_pitch)]
+        pt.time_from_start = rospy.Duration(self._traj_time_s)
+        jt.points = [pt]
+        self._pub.publish(jt)
+
+
+def main():
+    try:
+        TiagoHeadMapper()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass
+
+
+if __name__ == '__main__':
+    main()

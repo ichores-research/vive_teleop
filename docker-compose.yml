@@ -1,7 +1,8 @@
 services:
   ros1_bridge:
     build:
-      context: ./bridge
+      context: .
+      dockerfile: bridge/Dockerfile
       network: host
     cap_add:
       - NET_ADMIN
