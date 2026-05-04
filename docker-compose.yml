@@ -64,7 +64,9 @@ services:
       # This replaces the need to download SteamVR inside the container
       # its very annoying to do since you need to log in first,
       # so you need to mount it from host
-      - ${HOME}/.local/share/Steam/steamapps/common/SteamVR:/opt/steamvr:ro
+      - /home/robot/.steam:/root/.steam:ro
+      - /home/robot/.local/share/Steam:/root/.local/share/Steam:ro
+      - /home/robot/.local/share/Steam/steamapps/common/SteamVR:/opt/steamvr:ro
 
       - steamvr_data:/root/.steam
       - steamvr_config:/root/.config/openvr

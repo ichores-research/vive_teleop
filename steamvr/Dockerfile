@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libnss3 libnss3:i386 libdbus-1-3 libdbus-1-3:i386 \
         libudev1 libudev1:i386 libusb-1.0-0 libusb-1.0-0:i386 \
         libvulkan1 libvulkan1:i386 vulkan-tools \
+        libsdl2-2.0-0 libsdl2-2.0-0:i386 \
+        libpipewire-0.3-0 libpipewire-0.3-0:i386 \
+        libxcb-dri3-0 libxcb-present0 libxcb-icccm4 libxcb-sync1 \
+        libnm0 libtinfo6 libcap2 libasound2 libasound2:i386 \
         pulseaudio python3 tar xz-utils procps nano \
     && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
     && dpkg-reconfigure --frontend=noninteractive locales \
