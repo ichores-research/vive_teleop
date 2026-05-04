@@ -3,11 +3,10 @@ FROM debian:bookworm-slim
 ENV USER=steam
 ENV HOMEDIR="/home/steam"
 
-# ── Step 1: i386 multiarch ──────────────────────────────────────────────────
+# ── Step 1: i386 multiarch ────────────────────────────────────────────────────
 RUN dpkg --add-architecture i386
 
 # ── Step 2: Install dependencies ─────────────────────────────────────────────
-# We keep your original list as these are essential for the SteamVR runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         lib32gcc-s1 lib32stdc++6 ca-certificates curl locales \
         xvfb x11vnc \
@@ -23,25 +22,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpipewire-0.3-0 libpipewire-0.3-0:i386 \
         libxcb-dri3-0 libxcb-present0 libxcb-icccm4 libxcb-sync1 \
         libnm0 libtinfo6 libcap2 libasound2 libasound2:i386 \
-        libglx-mesa0 \
-        libglx0 \
-        libgl1-mesa-dri \
-        libglx-mesa0:i386 \
-        libgl1-mesa-dri:i386 \
+        libcap2-bin \
+        libglx-mesa0 libglx0 libgl1-mesa-dri \
+        libglx-mesa0:i386 libgl1-mesa-dri:i386 \
         mesa-utils \
-        libqt5core5a \
-        libqt5gui5 \
-        libqt5widgets5 \
-        libqt5dbus5 \
-        libqt5network5 \
-        libqt5opengl5 \
-        libopengl0 \
-        libqt5multimedia5 \
-        libqt5multimediawidgets5 \
-        gstreamer1.0-plugins-base \
-        gstreamer1.0-plugins-good \
+        libqt5core5a libqt5gui5 libqt5widgets5 libqt5dbus5 \
+        libqt5network5 libqt5opengl5 libopengl0 \
+        libqt5multimedia5 libqt5multimediawidgets5 \
         libqt5printsupport5 \
-        pulseaudio python3 tar xz-utils procps nano \
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+        pipewire pipewire-pulse wireplumber libspa-0.2-modules \
+        pulseaudio \
+        dbus dbus-x11 udev usbutils \
+        python3 tar xz-utils procps nano \
     && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
     && dpkg-reconfigure --frontend=noninteractive locales \
     && rm -rf /var/lib/apt/lists/*
@@ -49,9 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Step 3: Setup User & Entrypoint ──────────────────────────────────────────
 RUN useradd -m "${USER}"
 
-# Copy your udev rules
 COPY udev/60-HTC-Vive-perms.rules /etc/udev/rules.d/60-HTC-Vive-perms.rules
-
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
