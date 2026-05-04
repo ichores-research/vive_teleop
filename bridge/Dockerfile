@@ -4,7 +4,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
 # Install core tooling and debug utilities
-RUN apt-get update && apt-get install -y \
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     curl \
     gnupg2 \
     lsb-release \
@@ -14,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     valgrind \
     strace \
     tzdata \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Add ROS 1 and ROS 2 repositories
@@ -21,10 +24,22 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o 
 RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros2.list
 RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros1.list
 
-# Install ROS 1 Noetic, ROS 2 Foxy, and build tools
-RUN apt-get update && apt-get install -y \
+# Following steps are split into smaller steps to leverage docker cache
+# lab internet is so bad it cant handle downloading the whole ros1 and ros2 distributions
+# at once without breaking, so we download them one by one over multiple runs
+
+# Install ROS 1 Noetic Base
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-noetic-ros-base \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ROS 2 Foxy Base
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-foxy-ros-base \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Build Tools and Middleware
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-colcon-common-extensions \
     python3-rosdep \
     ros-foxy-rmw-cyclonedds-cpp \
@@ -54,8 +69,5 @@ RUN /bin/bash -c "source /opt/ros/noetic/setup.bash && \
 RUN echo 'source /opt/ros/noetic/setup.bash' >> /root/.bashrc \
     && echo 'source /opt/ros/foxy/setup.bash' >> /root/.bashrc \
     && echo 'source /bridge_ws/install/setup.bash' >> /root/.bashrc
-
-# TODO: On next big change move it up, for now its here so docker caches previous big steps
-RUN apt-get update && apt-get install -y iproute2 && rm -rf /var/lib/apt/lists/*
 
 CMD ["/bin/bash"]
