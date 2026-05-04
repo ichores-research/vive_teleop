@@ -23,6 +23,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpipewire-0.3-0 libpipewire-0.3-0:i386 \
         libxcb-dri3-0 libxcb-present0 libxcb-icccm4 libxcb-sync1 \
         libnm0 libtinfo6 libcap2 libasound2 libasound2:i386 \
+        libglx-mesa0 \
+        libglx0 \
+        libgl1-mesa-dri \
+        libglx-mesa0:i386 \
+        libgl1-mesa-dri:i386 \
+        mesa-utils \
+        libqt5core5a \
+        libqt5gui5 \
+        libqt5widgets5 \
+        libqt5dbus5 \
+        libqt5network5 \
+        libqt5opengl5 \
+        libopengl0 \
+        libqt5multimedia5 \
+        libqt5multimediawidgets5 \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        libqt5printsupport5 \
         pulseaudio python3 tar xz-utils procps nano \
     && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
     && dpkg-reconfigure --frontend=noninteractive locales \
