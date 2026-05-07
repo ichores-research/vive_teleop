@@ -23,6 +23,7 @@ services:
       - ROS_MASTER_URI=http://10.68.0.1:11311
       - ROS_IP=10.68.0.52
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
   ros2_app:
     build:
       context: ./ros2_app
@@ -33,7 +34,6 @@ services:
       - ./ros2_app:/ros2_ws/src/image_listener
 
     working_dir: /ros2_ws
-
     restart: unless-stopped
 
     command: >
@@ -42,63 +42,69 @@ services:
       source install/setup.bash || true &&
       ros2 run image_listener image_subscriber
       "
+
   steamvr:
     build:
       context: ./steamvr
       network: host
+
     container_name: steamvr
     privileged: true
-    restart: unless-stopped
+    restart: no
+
     environment:
-      - DISPLAY=:99
+      - DISPLAY=:0
+      - XDG_RUNTIME_DIR=/tmp/runtime-steam
+
+      # NVIDIA
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute,display
       - VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+
+      # OpenXR / Monado
+      - XRT_RUNTIME_JSON=/usr/local/share/openxr/1/openxr_monado.json
+      - XRT_COMPOSITOR_FORCE_XCB=1
+      - XRT_DEBUG_GUI=0
+
+      # tuning
+      - MESA_GLTHREAD=true
+      - vblank_mode=0
+
     volumes:
+      # X11 passthrough
       - /tmp/.X11-unix:/tmp/.X11-unix
+
+      # system / hardware
       - /dev/bus/usb:/dev/bus/usb
       - /dev:/dev
-      - /run/udev:/run/udev:ro
-      
-      # ── BIND MOUNT FROM HOST ──
-      # This replaces the need to download SteamVR inside the container
-      # its very annoying to do since you need to log in first,
-      # so you need to mount it from host
-      - /home/robot/.steam:/root/.steam:ro
-      - /home/robot/.local/share/Steam:/root/.local/share/Steam:ro
-      - /home/robot/.local/share/Steam/steamapps/common/SteamVR:/opt/steamvr:ro
-      # SteamVR expects ~/.steam/sdk{32,64}/steamclient.so; the host mount above
-      # often doesn't include those paths. Provide writable overlays so the
-      # entrypoint can create the expected files.
-      - steam_sdk64:/root/.steam/sdk64
-      - steam_sdk32:/root/.steam/sdk32
+      - /run/udev:/run/udev
+      - /run/dbus:/run/dbus
+      - /sys:/sys
 
-      - steamvr_config:/root/.config/openvr
-      - steamvr_logs:/root/openvr/logs
+      # Monado state
+      - monado_config:/home/steam/.config/monado
+      - monado_logs:/home/steam/.local/share/monado
+
     devices:
       - /dev/dri:/dev/dri
+
     runtime: nvidia
+
     networks:
       field_net:
         ipv4_address: 10.68.0.53
+
     ports:
       - "5900:5900"
 
 volumes:
-  steamvr_config:
-  steamvr_logs:
-  steam_sdk64:
-  steam_sdk32:
-  openvr_runtime:
+  monado_config:
+  monado_logs:
 
 networks:
   field_net:
-  #if using wifi connection might be dropped since macvlan assigns multiple virtual mac addresses
-  #wifi drivers dont like that. if that is the case use ipvlan and l2 mode
     driver: macvlan
     driver_opts:
-    #NIC=wlp4s0 in .env if connected to wifi instead of ethernet
-    #if in doubt check ip addr
       parent: ${NIC:-enp2s0f0}
     ipam:
       config:
