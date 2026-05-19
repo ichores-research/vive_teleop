@@ -47,4 +47,4 @@ export XDG_CONFIG_HOME="/etc"
 export LD_LIBRARY_PATH="/root/.local/share/Steam/linux64:/opt/steamvr/bin/linux64:/opt/steamvr/bin/vrclient/linux64:/root/.steam/sdk64:$LD_LIBRARY_PATH"
 
 VRSERVER_PATH="/opt/steamvr/bin/linux64/vrserver"
-exec "$VRSERVER_PATH" --keepalive 2>&1 | tee /var/log/steamvr.log
+exec /opt/steamvr/bin/linux64/vrstartup
