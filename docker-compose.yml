@@ -57,6 +57,17 @@ services:
         ros2 run image_listener image_subscriber
       "
 
+  coturn:
+    image: coturn/coturn:latest
+    container_name: coturn
+    restart: unless-stopped
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.133
+
 networks:
   field_net:
   #if using wifi connection might be dropped since macvlan assigns multiple virtual mac addresses
