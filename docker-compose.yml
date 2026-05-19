@@ -67,9 +67,14 @@ services:
       - /home/robot/.steam:/root/.steam:ro
       - /home/robot/.local/share/Steam:/root/.local/share/Steam:ro
       - /home/robot/.local/share/Steam/steamapps/common/SteamVR:/opt/steamvr:ro
+      # SteamVR expects ~/.steam/sdk{32,64}/steamclient.so; the host mount above
+      # often doesn't include those paths. Provide writable overlays so the
+      # entrypoint can create the expected files.
+      - steam_sdk64:/root/.steam/sdk64
+      - steam_sdk32:/root/.steam/sdk32
 
-      - steamvr_data:/root/.steam
       - steamvr_config:/root/.config/openvr
+      - steamvr_logs:/root/openvr/logs
     devices:
       - /dev/dri:/dev/dri
     runtime: nvidia
@@ -80,8 +85,10 @@ services:
       - "5900:5900"
 
 volumes:
-  steamvr_data:
   steamvr_config:
+  steamvr_logs:
+  steam_sdk64:
+  steam_sdk32:
   openvr_runtime:
 
 networks:
