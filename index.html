@@ -1,132 +1,159 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ROS WebRTC Viewer</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 16px; padding: 24px; }
-    h1 { font-size: 18px; font-weight: 500; color: #ccc; }
-    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
-    input[type="text"] { background: #222; border: 1px solid #444; color: #eee; padding: 8px 12px; border-radius: 6px; font-size: 14px; width: 260px; }
-    button { background: #2563eb; color: white; border: none; padding: 8px 18px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
-    button:hover { background: #1d4ed8; }
-    button:disabled { background: #444; cursor: not-allowed; }
-    #disconnect { background: #dc2626; display: none; }
-    #disconnect:hover { background: #b91c1c; }
-    video { width: 100%; max-width: 800px; border-radius: 8px; background: #000; border: 1px solid #333; min-height: 200px; }
-    #status { font-size: 13px; padding: 6px 14px; border-radius: 20px; background: #222; color: #aaa; }
-    #status.connected { background: #14532d; color: #86efac; }
-    #status.error { background: #450a0a; color: #fca5a5; }
-    #status.connecting { background: #1e3a5f; color: #93c5fd; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROS 2 Camera Stream</title>
+    <style>
+        body { 
+            font-family: sans-serif; 
+            text-align: center; 
+            background: #1e1e1e; 
+            color: #ffffff; 
+            margin-top: 40px; 
+        }
+        video { 
+            background: #000; 
+            border: 2px solid #555; 
+            max-width: 80%; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+        }
+        button { 
+            padding: 12px 24px; 
+            font-size: 16px; 
+            cursor: pointer; 
+            background: #4CAF50; 
+            color: white; 
+            border: none; 
+            border-radius: 4px; 
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        button:hover { background: #45a049; }
+        #status { 
+            margin-bottom: 20px; 
+            font-size: 18px;
+            font-weight: bold; 
+            color: #ffeb3b; 
+        }
+    </style>
 </head>
 <body>
-  <h1>ROS WebRTC Viewer</h1>
 
-  <div class="controls">
-    <input type="text" id="server-url" value="http://10.68.0.132:8088/offer" placeholder="http://10.68.0.132:8088/offer" />
-    <button id="connect-btn" onclick="connect()">Connect</button>
-    <button id="disconnect" onclick="disconnect()">Disconnect</button>
-  </div>
+    <h1>ROS 2 Camera Stream</h1>
+    <button id="startBtn">Start Stream</button>
+    <div id="status">Status: Waiting to start...</div>
+    <br>
+    <video id="video-stream" autoplay playsinline muted></video>
 
-  <span id="status">Idle</span>
+    <script>
+        // CRITICAL: Point this exactly to your ipvlan container's IP
+        const SIGNALING_URL = 'http://10.68.0.132:8088/offer';
+        
+        let pc = null;
 
-  <video id="video" autoplay playsinline muted></video>
+        async function startStream() {
+            const statusEl = document.getElementById('status');
+            const startBtn = document.getElementById('startBtn');
+            
+            startBtn.disabled = true;
+            statusEl.innerText = "Status: Connecting to backend...";
+            statusEl.style.color = "#ffeb3b"; // Yellow
+            
+            // 1. Create Peer Connection
+            const config = {
+                sdpSemantics: 'unified-plan',
+                iceTransportPolicy: 'relay',
+                iceServers: [
+                    { urls: ['stun:stun.l.google.com:19302'] },
+                    // Including your coturn server from docker-compose
+                    { urls: ['turn:10.68.0.133:3478'],
+                      username: 'dummy',
+                      credential: 'dummy'
+                     } 
+                ]
+            };
 
-  <script>
-    let pc = null;
+            pc = new RTCPeerConnection(config);
 
-    function setStatus(text, cls) {
-      const el = document.getElementById('status');
-      el.textContent = text;
-      el.className = cls || '';
-    }
+            // 2. Setup track handling (when the video arrives)
+            pc.addEventListener('track', function(evt) {
+                if (evt.track.kind === 'video') {
+                    document.getElementById('video-stream').srcObject = evt.streams[0];
+                    statusEl.innerText = "Status: Connected & Streaming!";
+                    statusEl.style.color = "#4CAF50"; // Green
+                }
+            });
 
-    async function connect() {
-      if (pc) disconnect();
+            // Monitor connection health
+            pc.addEventListener('iceconnectionstatechange', function() {
+                console.log("ICE State:", pc.iceConnectionState);
+                if(pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+                    statusEl.innerText = "Status: Connection Failed (ICE Error)";
+                    statusEl.style.color = "#f44336"; // Red
+                    startBtn.disabled = false;
+                }
+            });
 
-      const url = document.getElementById('server-url').value.trim();
-      document.getElementById('connect-btn').disabled = true;
-      document.getElementById('disconnect').style.display = 'inline-block';
-      setStatus('Connecting…', 'connecting');
+            // Tell the backend we only want to receive video, not send it
+            pc.addTransceiver('video', { direction: 'recvonly' });
 
-      try {
-        pc = new RTCPeerConnection({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            {
-              urls: 'turn:10.68.0.133:3478',   // your host-ipvlan IP from earlier
-              username: 'dummy',
-              credential: 'dummy'
+            try {
+                // 3. Create Offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // 4. Wait for ICE gathering to complete before sending
+                // This injects the host IPs into the SDP so aiortc can see them
+                await new Promise((resolve) => {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (pc.iceGatheringState === 'complete') {
+                                pc.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        pc.addEventListener('icegatheringstatechange', checkState);
+                        
+                        // Failsafe timeout so it doesn't hang forever
+                        setTimeout(() => {
+                            pc.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }, 2000); 
+                    }
+                });
+
+                // 5. Send the compiled Offer to the ROS 2 container
+                statusEl.innerText = "Status: Exchanging WebRTC Keys...";
+                const response = await fetch(SIGNALING_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Backend responded with HTTP ${response.status}`);
+                }
+
+                // 6. Receive Answer and set Remote Description
+                const answer = await response.json();
+                await pc.setRemoteDescription(answer);
+
+            } catch (e) {
+                console.error("WebRTC Setup Error:", e);
+                statusEl.innerText = "Status: Error - " + e.message;
+                statusEl.style.color = "#f44336";
+                startBtn.disabled = false;
             }
-          ]
-        });
+        }
 
-        pc.addTransceiver('video', { direction: 'recvonly' });
-
-        pc.ontrack = (event) => {
-          const video = document.getElementById('video');
-          if (event.streams && event.streams[0]) {
-            video.srcObject = event.streams[0];
-          }
-        };
-
-        pc.onconnectionstatechange = () => {
-          const state = pc.connectionState;
-          if (state === 'connected') setStatus('Connected', 'connected');
-          else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-            setStatus('Disconnected', 'error');
-            document.getElementById('connect-btn').disabled = false;
-            document.getElementById('disconnect').style.display = 'none';
-          } else {
-            setStatus(state.charAt(0).toUpperCase() + state.slice(1) + '…', 'connecting');
-          }
-        };
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        // Wait for ICE gathering to complete
-        await new Promise((resolve) => {
-          if (pc.iceGatheringState === 'complete') return resolve();
-          pc.onicegatheringstatechange = () => {
-            if (pc.iceGatheringState === 'complete') resolve();
-          };
-          setTimeout(resolve, 3000); // fallback timeout
-        });
-
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sdp: pc.localDescription.sdp,
-            type: pc.localDescription.type,
-          }),
-        });
-
-        if (!response.ok) throw new Error(`Server responded with ${response.status}`);
-
-        const answer = await response.json();
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-
-      } catch (err) {
-        setStatus('Error: ' + err.message, 'error');
-        console.error(err);
-        document.getElementById('connect-btn').disabled = false;
-        document.getElementById('disconnect').style.display = 'none';
-        if (pc) { pc.close(); pc = null; }
-      }
-    }
-
-    function disconnect() {
-      if (pc) { pc.close(); pc = null; }
-      document.getElementById('video').srcObject = null;
-      document.getElementById('connect-btn').disabled = false;
-      document.getElementById('disconnect').style.display = 'none';
-      setStatus('Idle');
-    }
-  </script>
+        document.getElementById('startBtn').addEventListener('click', startStream);
+    </script>
 </body>
 </html>

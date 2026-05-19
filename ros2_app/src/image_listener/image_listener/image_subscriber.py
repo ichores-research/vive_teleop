@@ -16,16 +16,24 @@ class ROSVideoTrack(VideoStreamTrack):
     def __init__(self):
         super().__init__()
         self.frame = None
+        self._new_frame_event = asyncio.Event()
 
     def update_frame(self, frame):
         self.frame = frame
+        # Signal that a new frame is ready
+        self._new_frame_event.set()
 
     async def recv(self):
+        # Wait until a frame exists and is updated
+        await self._new_frame_event.wait()
+        self._new_frame_event.clear()
+
         pts, time_base = await self.next_timestamp()
-        if self.frame is None:
-            img = np.zeros((480, 640, 3), np.uint8)
-        else:
-            img = self.frame
+        
+        # Ensure we have a valid ndarray
+        img = self.frame
+        
+        # Convert to VideoFrame
         new_frame = VideoFrame.from_ndarray(img, format="bgr24")
         new_frame.pts = pts
         new_frame.time_base = time_base
@@ -36,14 +44,26 @@ class WebRTCForwarder(Node):
         super().__init__("webrtc_forwarder")
         self.bridge = CvBridge()
         self.video_track = ROSVideoTrack()
-        self.create_subscription(Image, "/xtion/rgb/image_raw", self.callback, 10)
+        # Use a reliable QoS profile for image streaming
+        self.create_subscription(
+            Image, 
+            "/xtion/rgb/image_raw", 
+            self.callback, 
+            rclpy.qos.qos_profile_sensor_data
+        )
 
     def callback(self, msg):
-        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        self.video_track.update_frame(cv_image)
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            # Use call_soon_threadsafe because update_frame triggers an asyncio event
+            # from a different thread (the ROS spin thread).
+            loop.call_soon_threadsafe(self.video_track.update_frame, cv_image)
+        except Exception as e:
+            self.get_logger().error(f"CV Bridge Error: {e}")
 
 pcs = set()
 node = None
+loop = asyncio.get_event_loop()
 
 ICE_CONFIG = RTCConfiguration(
     iceServers=[
@@ -97,8 +117,9 @@ async def on_shutdown(app):
     pcs.clear()
 
 def main():
-    global node
+    global node, loop
     rclpy.init()
+    loop = asyncio.get_event_loop()
     node = WebRTCForwarder()
     threading.Thread(target=lambda: rclpy.spin(node), daemon=True).start()
     app = web.Application()

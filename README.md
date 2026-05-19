@@ -41,3 +41,8 @@ A TURN server which allows connection from other services to the WebRTC server
 ### Why is it needed?
 
 Because WebRTC needs it to function properly with current network setup.
+
+## How to run this?
+
+1. sudo docker compose up --build
+2. python3 -m http.server 8000
