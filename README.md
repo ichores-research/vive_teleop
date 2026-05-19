@@ -28,9 +28,21 @@ To isolate subscriber/publisher logic from peripheral devices and allow easier c
 It will have API with explanation on how to consume such endpoints in future.
 For now it should expose WebRTC server with raw camera image on 0.0.0.0:8088/offer
 
-## steamvr
+## unity-vr-headset
 
-### will do later
+### What is it?
+
+It is a unity project which handles head teleoperation.
+
+### Why is it needed?
+
+To isolate head teleoperation from joystick logic, since bridge implementation throttles camera output down to ~23FPS.
+Unless the robot gets updated to ROS2 it is unusable due to fatigue and dizziness. Recommended VR FPS is 72-120, with 90 being a sweet spot.
+It is necessary to present a good MVP. 
+
+### Whats the input and output?
+It should consume WebRTC and serve the image to both lenses.
+It should output the headset position using a similiar WebRTC server (WIP, for now just return some stream of data)
 
 ## coturn
 
@@ -42,7 +54,7 @@ A TURN server which allows connection from other services to the WebRTC server
 
 Because WebRTC needs it to function properly with current network setup.
 
-## How to run this?
+## How to run this project?
 
 1. sudo docker compose up --build
 2. python3 -m http.server 8000
