@@ -42,6 +42,21 @@ services:
       source install/setup.bash || true &&
       ros2 run image_listener image_subscriber
       "
+  vive_tracker:
+    build:
+      context: ./vive_tracker
+      network: host
+    container_name: vive_tracker
+    privileged: true
+    volumes:
+      # Required for the container to read raw USB data from the joystick
+      - /dev/bus/usb:/dev/bus/usb
+      # Required so libsurvive can read device identifiers properly
+      - /run/udev:/run/udev:ro
+      # Optional: Maps dbus if you still want to experiment with Bluetooth power management
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+      - /dev:/dev # This ensures the container sees /dev/hidraw nodes
+      - ./vive_config:/root/.config/libsurvive
 
 networks:
   field_net:
