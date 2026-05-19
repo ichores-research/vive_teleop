@@ -23,6 +23,25 @@ services:
       - ROS_MASTER_URI=http://10.68.0.1:11311
       - ROS_IP=10.68.0.52
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+  ros2_app:
+    build:
+      context: ./ros2_app
+      network: host
+    container_name: ros2_app
+
+    volumes:
+      - ./ros2_app:/ros2_ws/src/image_listener
+
+    working_dir: /ros2_ws
+
+    restart: unless-stopped
+
+    command: >
+      bash -c "
+      source /opt/ros/foxy/setup.bash &&
+      source install/setup.bash || true &&
+      ros2 run image_listener image_subscriber
+      "
 
 networks:
   field_net:
