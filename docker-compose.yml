@@ -42,26 +42,54 @@ services:
       source install/setup.bash || true &&
       ros2 run image_listener image_subscriber
       "
-  vive_tracker:
+  steamvr:
     build:
-      context: ./vive_tracker
+      context: ./steamvr
       network: host
-    container_name: vive_tracker
+    container_name: steamvr
     privileged: true
+    restart: unless-stopped
+    environment:
+      - DISPLAY=:99
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute,display
+      - VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     volumes:
-      # Required for the container to read raw USB data from the joystick
+      - /tmp/.X11-unix:/tmp/.X11-unix
       - /dev/bus/usb:/dev/bus/usb
-      # Required so libsurvive can read device identifiers properly
+      - /dev:/dev
       - /run/udev:/run/udev:ro
-      # Optional: Maps dbus if you still want to experiment with Bluetooth power management
-      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
-      - /dev:/dev # This ensures the container sees /dev/hidraw nodes
-      - ./vive_config:/root/.config/libsurvive
+      
+      # ── BIND MOUNT FROM HOST ──
+      # This replaces the need to download SteamVR inside the container
+      # its very annoying to do since you need to log in first,
+      # so you need to mount it from host
+      - ${HOME}/.local/share/Steam/steamapps/common/SteamVR:/opt/steamvr:ro
+
+      - steamvr_data:/root/.steam
+      - steamvr_config:/root/.config/openvr
+    devices:
+      - /dev/dri:/dev/dri
+    runtime: nvidia
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.53
+    ports:
+      - "5900:5900"
+
+volumes:
+  steamvr_data:
+  steamvr_config:
+  openvr_runtime:
 
 networks:
   field_net:
+  #if using wifi connection might be dropped since macvlan assigns multiple virtual mac addresses
+  #wifi drivers dont like that. if that is the case use ipvlan and l2 mode
     driver: macvlan
     driver_opts:
+    #NIC=wlp4s0 in .env if connected to wifi instead of ethernet
+    #if in doubt check ip addr
       parent: ${NIC:-enp2s0f0}
     ipam:
       config:
