@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROS 2 Camera Stream</title>
+    <style>
+        body { 
+            font-family: sans-serif; 
+            text-align: center; 
+            background: #1e1e1e; 
+            color: #ffffff; 
+            margin-top: 40px; 
+        }
+        video { 
+            background: #000; 
+            border: 2px solid #555; 
+            max-width: 80%; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+        }
+        button { 
+            padding: 12px 24px; 
+            font-size: 16px; 
+            cursor: pointer; 
+            background: #4CAF50; 
+            color: white; 
+            border: none; 
+            border-radius: 4px; 
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        button:hover { background: #45a049; }
+        #status { 
+            margin-bottom: 20px; 
+            font-size: 18px;
+            font-weight: bold; 
+            color: #ffeb3b; 
+        }
+    </style>
+</head>
+<body>
+
+    <h1>ROS 2 Camera Stream</h1>
+    <button id="startBtn">Start Stream</button>
+    <div id="status">Status: Waiting to start...</div>
+    <br>
+    <video id="video-stream" autoplay playsinline muted></video>
+
+    <script>
+        // CRITICAL: Point this exactly to your ipvlan container's IP
+        const SIGNALING_URL = 'http://10.68.0.132:8088/offer';
+        
+        let pc = null;
+
+        async function startStream() {
+            const statusEl = document.getElementById('status');
+            const startBtn = document.getElementById('startBtn');
+            
+            startBtn.disabled = true;
+            statusEl.innerText = "Status: Connecting to backend...";
+            statusEl.style.color = "#ffeb3b"; // Yellow
+            
+            // 1. Create Peer Connection
+            const config = {
+                sdpSemantics: 'unified-plan',
+                iceTransportPolicy: 'relay',
+                iceServers: [
+                    { urls: ['stun:stun.l.google.com:19302'] },
+                    // Including your coturn server from docker-compose
+                    { urls: ['turn:10.68.0.133:3478'],
+                      username: 'dummy',
+                      credential: 'dummy'
+                     } 
+                ]
+            };
+
+            pc = new RTCPeerConnection(config);
+
+            // 2. Setup track handling (when the video arrives)
+            pc.addEventListener('track', function(evt) {
+                if (evt.track.kind === 'video') {
+                    document.getElementById('video-stream').srcObject = evt.streams[0];
+                    statusEl.innerText = "Status: Connected & Streaming!";
+                    statusEl.style.color = "#4CAF50"; // Green
+                }
+            });
+
+            // Monitor connection health
+            pc.addEventListener('iceconnectionstatechange', function() {
+                console.log("ICE State:", pc.iceConnectionState);
+                if(pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+                    statusEl.innerText = "Status: Connection Failed (ICE Error)";
+                    statusEl.style.color = "#f44336"; // Red
+                    startBtn.disabled = false;
+                }
+            });
+
+            // Tell the backend we only want to receive video, not send it
+            pc.addTransceiver('video', { direction: 'recvonly' });
+
+            try {
+                // 3. Create Offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // 4. Wait for ICE gathering to complete before sending
+                // This injects the host IPs into the SDP so aiortc can see them
+                await new Promise((resolve) => {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (pc.iceGatheringState === 'complete') {
+                                pc.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        pc.addEventListener('icegatheringstatechange', checkState);
+                        
+                        // Failsafe timeout so it doesn't hang forever
+                        setTimeout(() => {
+                            pc.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }, 2000); 
+                    }
+                });
+
+                // 5. Send the compiled Offer to the ROS 2 container
+                statusEl.innerText = "Status: Exchanging WebRTC Keys...";
+                const response = await fetch(SIGNALING_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Backend responded with HTTP ${response.status}`);
+                }
+
+                // 6. Receive Answer and set Remote Description
+                const answer = await response.json();
+                await pc.setRemoteDescription(answer);
+
+            } catch (e) {
+                console.error("WebRTC Setup Error:", e);
+                statusEl.innerText = "Status: Error - " + e.message;
+                statusEl.style.color = "#f44336";
+                startBtn.disabled = false;
+            }
+        }
+
+        document.getElementById('startBtn').addEventListener('click', startStream);
+    </script>
+</body>
+</html>

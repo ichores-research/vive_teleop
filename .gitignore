@@ -1,1 +1,72 @@
 .env
+# =========================
+# Unity (core folders)
+# =========================
+
+unity-vr-headset/[Ll]ibrary/
+unity-vr-headset/[Tt]emp/
+unity-vr-headset/[Oo]bj/
+unity-vr-headset/[Bb]uild/
+unity-vr-headset/[Bb]uilds/
+unity-vr-headset/[Ll]ogs/
+unity-vr-headset/[Uu]ser[Ss]ettings/
+
+# =========================
+# Unity generated files
+# =========================
+
+unity-vr-headset/*.csproj
+unity-vr-headset/*.sln
+unity-vr-headset/*.unityproj
+unity-vr-headset/*.user
+unity-vr-headset/*.userprefs
+unity-vr-headset/*.pidb
+unity-vr-headset/*.booproj
+unity-vr-headset/*.svd
+unity-vr-headset/*.pdb
+unity-vr-headset/*.opendb
+
+# =========================
+# Unity packages cache (optional but safe)
+# =========================
+
+unity-vr-headset/Packages/packages-lock.json
+
+# =========================
+# OS junk
+# =========================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# IDEs
+# =========================
+
+.vs/
+.vscode/
+.idea/
+
+# =========================
+# Builds
+# =========================
+
+*.apk
+*.aab
+*.exe
+*.app
+*.unitypackage
+
+# =========================
+# Crash / logs
+# =========================
+
+*.log
+sysinfo.txt
+
+# =========================
+# Addressables (if used later)
+# =========================
+
+unity-vr-headset/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*

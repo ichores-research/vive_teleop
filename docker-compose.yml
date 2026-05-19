@@ -18,18 +18,71 @@ services:
         exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
     networks:
       field_net:
-        ipv4_address: 10.68.0.52
+        ipv4_address: 10.68.0.131
     environment:
       - ROS_MASTER_URI=http://10.68.0.1:11311
-      - ROS_IP=10.68.0.52
+      - ROS_IP=10.68.0.131
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+  ros2_app:
+    build:
+      context: ./ros2_app
+
+    container_name: ros2_app
+
+    volumes:
+      - ./ros2_app/src/image_listener:/ros2_ws/src/image_listener
+
+    working_dir: /ros2_ws
+
+    restart: on-failure
+
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///ros2_ws/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+      - PYTHONUNBUFFERED=1
+
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.132
+
+    ports:
+      - "8088:8088"
+
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        source install/setup.bash &&
+        /wait-for-bridge.sh &&
+        ros2 run image_listener image_subscriber
+      "
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: coturn
+    restart: unless-stopped
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.133
 
 networks:
   field_net:
-    driver: macvlan
+  #if using wifi connection might be dropped since macvlan assigns multiple virtual mac addresses
+  #wifi drivers dont like that. if that is the case use ipvlan and l2 mode
+    driver: ipvlan
     driver_opts:
+    #NIC=eno1 in .env if connected to wifi instead of ethernet
+    #if in doubt check ip addr
       parent: ${NIC:-enp2s0f0}
+      ipvlan_mode: l2
     ipam:
       config:
         - subnet: 10.68.0.0/24
           gateway: 10.68.0.1
+
+#sudo ip link add host-ipvlan link enp2s0f0 type ipvlan mode l2
+#sudo ip addr add 10.68.0.200/24 dev host-ipvlan
+#sudo ip link set host-ipvlan up
