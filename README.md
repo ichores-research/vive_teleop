@@ -58,3 +58,6 @@ Because WebRTC needs it to function properly with current network setup.
 
 1. sudo docker compose up --build
 2. python3 -m http.server 8000
+3. Launch unity and open unity-vr-headset as a project
+4. Launch steamvr
+5. Press play
