@@ -11,6 +11,17 @@ RUN apt update && apt install -y \
     ros-foxy-vision-opencv \
     python3-pip \
     python3-opencv \
+    libavdevice-dev \
+    libavfilter-dev \
+    libavformat-dev \
+    libavcodec-dev \
+    libswresample-dev \
+    libswscale-dev \
+    libavutil-dev \
+    libopus-dev \
+    libvpx-dev \
+    pkg-config \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY cyclonedds.xml /ros2_ws/cyclonedds.xml

@@ -40,7 +40,7 @@ services:
       field_net:
         ipv4_address: 10.68.0.132
     ports:
-      - "8080:8080"
+      - "8088:8088"
     command: >
       bash -c "
         source /opt/ros/foxy/setup.bash &&
@@ -89,6 +89,16 @@ services:
         ipv4_address: 10.68.0.53
     ports:
       - "5900:5900"
+  coturn:
+    image: coturn/coturn:latest
+    container_name: coturn
+    restart: unless-stopped
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.133
 
 volumes:
   steamvr_config:
@@ -111,3 +121,7 @@ networks:
       config:
         - subnet: 10.68.0.0/24
           gateway: 10.68.0.1
+
+#sudo ip link add host-ipvlan link enp2s0f0 type ipvlan mode l2
+#sudo ip addr add 10.68.0.200/24 dev host-ipvlan
+#sudo ip link set host-ipvlan up

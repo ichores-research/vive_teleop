@@ -1,3 +1,6 @@
+aiortc
+aiohttp
+aiohttp_cors
+av
 opencv-python
 numpy
-flask

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ROS WebRTC Viewer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 16px; padding: 24px; }
+    h1 { font-size: 18px; font-weight: 500; color: #ccc; }
+    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+    input[type="text"] { background: #222; border: 1px solid #444; color: #eee; padding: 8px 12px; border-radius: 6px; font-size: 14px; width: 260px; }
+    button { background: #2563eb; color: white; border: none; padding: 8px 18px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #444; cursor: not-allowed; }
+    #disconnect { background: #dc2626; display: none; }
+    #disconnect:hover { background: #b91c1c; }
+    video { width: 100%; max-width: 800px; border-radius: 8px; background: #000; border: 1px solid #333; min-height: 200px; }
+    #status { font-size: 13px; padding: 6px 14px; border-radius: 20px; background: #222; color: #aaa; }
+    #status.connected { background: #14532d; color: #86efac; }
+    #status.error { background: #450a0a; color: #fca5a5; }
+    #status.connecting { background: #1e3a5f; color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <h1>ROS WebRTC Viewer</h1>
+
+  <div class="controls">
+    <input type="text" id="server-url" value="http://10.68.0.132:8088/offer" placeholder="http://10.68.0.132:8088/offer" />
+    <button id="connect-btn" onclick="connect()">Connect</button>
+    <button id="disconnect" onclick="disconnect()">Disconnect</button>
+  </div>
+
+  <span id="status">Idle</span>
+
+  <video id="video" autoplay playsinline muted></video>
+
+  <script>
+    let pc = null;
+
+    function setStatus(text, cls) {
+      const el = document.getElementById('status');
+      el.textContent = text;
+      el.className = cls || '';
+    }
+
+    async function connect() {
+      if (pc) disconnect();
+
+      const url = document.getElementById('server-url').value.trim();
+      document.getElementById('connect-btn').disabled = true;
+      document.getElementById('disconnect').style.display = 'inline-block';
+      setStatus('Connecting…', 'connecting');
+
+      try {
+        pc = new RTCPeerConnection({
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            {
+              urls: 'turn:10.68.0.133:3478',   // your host-ipvlan IP from earlier
+              username: 'dummy',
+              credential: 'dummy'
+            }
+          ]
+        });
+
+        pc.addTransceiver('video', { direction: 'recvonly' });
+
+        pc.ontrack = (event) => {
+          const video = document.getElementById('video');
+          if (event.streams && event.streams[0]) {
+            video.srcObject = event.streams[0];
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          const state = pc.connectionState;
+          if (state === 'connected') setStatus('Connected', 'connected');
+          else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+            setStatus('Disconnected', 'error');
+            document.getElementById('connect-btn').disabled = false;
+            document.getElementById('disconnect').style.display = 'none';
+          } else {
+            setStatus(state.charAt(0).toUpperCase() + state.slice(1) + '…', 'connecting');
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        // Wait for ICE gathering to complete
+        await new Promise((resolve) => {
+          if (pc.iceGatheringState === 'complete') return resolve();
+          pc.onicegatheringstatechange = () => {
+            if (pc.iceGatheringState === 'complete') resolve();
+          };
+          setTimeout(resolve, 3000); // fallback timeout
+        });
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sdp: pc.localDescription.sdp,
+            type: pc.localDescription.type,
+          }),
+        });
+
+        if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+
+        const answer = await response.json();
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+
+      } catch (err) {
+        setStatus('Error: ' + err.message, 'error');
+        console.error(err);
+        document.getElementById('connect-btn').disabled = false;
+        document.getElementById('disconnect').style.display = 'none';
+        if (pc) { pc.close(); pc = null; }
+      }
+    }
+
+    function disconnect() {
+      if (pc) { pc.close(); pc = null; }
+      document.getElementById('video').srcObject = null;
+      document.getElementById('connect-btn').disabled = false;
+      document.getElementById('disconnect').style.display = 'none';
+      setStatus('Idle');
+    }
+  </script>
+</body>
+</html>
