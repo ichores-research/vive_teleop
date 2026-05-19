@@ -18,30 +18,36 @@ services:
         exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
     networks:
       field_net:
-        ipv4_address: 10.68.0.52
+        ipv4_address: 10.68.0.131
     environment:
       - ROS_MASTER_URI=http://10.68.0.1:11311
-      - ROS_IP=10.68.0.52
+      - ROS_IP=10.68.0.131
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
   ros2_app:
     build:
       context: ./ros2_app
       network: host
     container_name: ros2_app
-
     volumes:
-      - ./ros2_app:/ros2_ws/src/image_listener
-
+      - ./ros2_app/src/image_listener:/ros2_ws/src/image_listener
     working_dir: /ros2_ws
-
-    restart: unless-stopped
-
+    restart: on-failure
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///ros2_ws/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.132
+    ports:
+      - "8080:8080"
     command: >
       bash -c "
-      source /opt/ros/foxy/setup.bash &&
-      source install/setup.bash || true &&
-      ros2 run image_listener image_subscriber
-      "
+        source /opt/ros/foxy/setup.bash &&
+        source install/setup.bash &&
+        /wait-for-bridge.sh &&
+        ros2 run image_listener image_subscriber
+        "
   steamvr:
     build:
       context: ./steamvr
@@ -95,11 +101,12 @@ networks:
   field_net:
   #if using wifi connection might be dropped since macvlan assigns multiple virtual mac addresses
   #wifi drivers dont like that. if that is the case use ipvlan and l2 mode
-    driver: macvlan
+    driver: ipvlan
     driver_opts:
-    #NIC=wlp4s0 in .env if connected to wifi instead of ethernet
+    #NIC=eno1 in .env if connected to wifi instead of ethernet
     #if in doubt check ip addr
       parent: ${NIC:-enp2s0f0}
+      ipvlan_mode: l2
     ipam:
       config:
         - subnet: 10.68.0.0/24
