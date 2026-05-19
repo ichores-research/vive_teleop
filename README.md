@@ -36,13 +36,14 @@ It is a unity project which handles head teleoperation.
 
 ### Why is it needed?
 
-To isolate head teleoperation from joystick logic, since bridge implementation throttles camera output down to ~23FPS.
+To render whatever robot sees to vr, but for now it is only for debugging, since bridge implementation throttles camera output down to ~23FPS.
 Unless the robot gets updated to ROS2 it is unusable due to fatigue and dizziness. Recommended VR FPS is 72-120, with 90 being a sweet spot.
 It is necessary to present a good MVP. 
 
 ### Whats the input and output?
 It should consume WebRTC and serve the image to both lenses.
 It should output the headset position using a similiar WebRTC server (WIP, for now just return some stream of data)
+In future it should output joystick input as well.
 
 ## coturn
 
