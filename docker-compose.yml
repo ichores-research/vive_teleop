@@ -26,28 +26,36 @@ services:
   ros2_app:
     build:
       context: ./ros2_app
-      network: host
+
     container_name: ros2_app
+
     volumes:
       - ./ros2_app/src/image_listener:/ros2_ws/src/image_listener
+
     working_dir: /ros2_ws
+
     restart: on-failure
+
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CYCLONEDDS_URI=file:///ros2_ws/cyclonedds.xml
       - ROS_DOMAIN_ID=0
+      - PYTHONUNBUFFERED=1
+
     networks:
       field_net:
         ipv4_address: 10.68.0.132
+
     ports:
       - "8088:8088"
+
     command: >
       bash -c "
-        source /opt/ros/foxy/setup.bash &&
+        source /opt/ros/humble/setup.bash &&
         source install/setup.bash &&
         /wait-for-bridge.sh &&
         ros2 run image_listener image_subscriber
-        "
+      "
   steamvr:
     build:
       context: ./steamvr

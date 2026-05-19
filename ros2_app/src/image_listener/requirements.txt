@@ -1,6 +1,6 @@
-aiortc
-aiohttp
-aiohttp_cors
-av
-opencv-python
-numpy
+numpy==1.26.4
+aiohttp==3.9.5
+aiohttp-cors==0.7.0
+opencv-python-headless==4.10.0.84
+aiortc==1.7.0
+av==11.0.0
