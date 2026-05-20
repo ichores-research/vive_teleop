@@ -1,0 +1,65 @@
+@startuml
+title vive_teleop architecture
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+actor "Browser debug client\nindex.html\nhttp://localhost:8000" as Browser
+actor "Unity VR headset\nunity-vr-headset" as Unity
+
+node "Robot network\n10.68.0.0/24" as Net {
+  node "Robot\nROS1 master\n10.68.0.1:11311" as Robot {
+    component "ROS1 camera topic\n/xtion/rgb/image_raw" as Ros1Camera
+  }
+
+  node "ros1_bridge container\n10.68.0.131" as Bridge {
+    component "ros1_bridge dynamic_bridge\nNoetic -> Foxy" as DynamicBridge
+  }
+
+  node "ros2_app container\n10.68.0.132\nport 8088" as Ros2App {
+    component "image_subscriber\nROS2 node" as ImageSubscriber
+    component "LatestFrameVideoTrack" as VideoTrack
+    component "WebRTCServer\naiohttp + aiortc" as WebRTCServer
+    component "MockInputPublisher\nROS2 node" as InputPublisher
+    queue "ROS2 topic\n/vive/input_mock" as InputTopic
+  }
+
+  node "coturn container\n10.68.0.133:3478" as Coturn {
+    component "TURN relay\nuser dummy/dummy" as TurnRelay
+  }
+}
+
+cloud "Docker host" as Host {
+  component "python3 -m http.server 8000" as StaticServer
+}
+
+Ros1Camera --> DynamicBridge : ROS1 topic
+DynamicBridge --> ImageSubscriber : ROS2 /xtion/rgb/image_raw
+ImageSubscriber --> VideoTrack : latest BGR frame
+VideoTrack --> WebRTCServer : media track
+WebRTCServer --> InputPublisher : data-channel messages
+InputPublisher --> InputTopic : std_msgs/String
+
+StaticServer --> Browser : serves index.html
+Browser --> WebRTCServer : HTTP POST /offer\nSDP offer/answer
+Browser --> WebRTCServer : HTTP POST /input_offer\nSDP offer/answer
+Browser .. TurnRelay : ICE relay candidates
+
+Unity --> WebRTCServer : WebRTC video + input
+Unity .. TurnRelay : ICE relay candidates
+
+note right of WebRTCServer
+  Runtime entrypoint:
+  ros2 run image_listener image_subscriber
+
+  image_subscriber delegates to teleop_webrtc,
+  which wires WebRTCServer to the ROS nodes.
+end note
+
+note bottom of Net
+  Runtime network: docker compose field_net
+  driver: ipvlan, mode: l2
+end note
+
+@enduml
