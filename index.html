@@ -3,157 +3,672 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ROS 2 Camera Stream</title>
+    <title>Vive Teleop WebRTC Debug</title>
     <style>
-        body { 
-            font-family: sans-serif; 
-            text-align: center; 
-            background: #1e1e1e; 
-            color: #ffffff; 
-            margin-top: 40px; 
+        :root {
+            color-scheme: dark;
+            --bg: #181818;
+            --panel: #242424;
+            --panel-2: #2d2d2d;
+            --border: #444;
+            --text: #f2f2f2;
+            --muted: #b7b7b7;
+            --ok: #45b26b;
+            --warn: #f0bc42;
+            --error: #e15a4f;
+            --accent: #5b9bd5;
         }
-        video { 
-            background: #000; 
-            border: 2px solid #555; 
-            max-width: 80%; 
-            border-radius: 8px; 
-            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+
+        * {
+            box-sizing: border-box;
         }
-        button { 
-            padding: 12px 24px; 
-            font-size: 16px; 
-            cursor: pointer; 
-            background: #4CAF50; 
-            color: white; 
-            border: none; 
-            border-radius: 4px; 
-            margin-bottom: 20px;
-            font-weight: bold;
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--text);
         }
-        button:hover { background: #45a049; }
-        #status { 
-            margin-bottom: 20px; 
+
+        main {
+            display: grid;
+            grid-template-rows: auto auto minmax(280px, 1fr) auto;
+            min-height: 100vh;
+        }
+
+        header,
+        .controls,
+        .log-panel {
+            border-bottom: 1px solid var(--border);
+            background: var(--panel);
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px 18px;
+        }
+
+        h1 {
+            margin: 0;
             font-size: 18px;
-            font-weight: bold; 
-            color: #ffeb3b; 
+            font-weight: 650;
+        }
+
+        .status-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .status {
+            min-width: 132px;
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel-2);
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .status.ok {
+            border-color: color-mix(in srgb, var(--ok) 70%, var(--border));
+            color: var(--ok);
+        }
+
+        .status.warn {
+            border-color: color-mix(in srgb, var(--warn) 70%, var(--border));
+            color: var(--warn);
+        }
+
+        .status.error {
+            border-color: color-mix(in srgb, var(--error) 70%, var(--border));
+            color: var(--error);
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: minmax(220px, 1.4fr) minmax(170px, 1fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr) auto;
+            gap: 12px;
+            align-items: end;
+            padding: 14px 18px;
+        }
+
+        label {
+            display: grid;
+            gap: 6px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            min-width: 0;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: #111;
+            color: var(--text);
+            font: inherit;
+            font-size: 14px;
+            line-height: 1.35;
+        }
+
+        input {
+            height: 38px;
+            padding: 8px 10px;
+        }
+
+        textarea {
+            min-height: 86px;
+            resize: vertical;
+            padding: 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .relay-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            height: 38px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: #111;
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        .relay-toggle input {
+            width: 16px;
+            height: 16px;
+            margin: 0;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .preset-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            height: 38px;
+            min-width: 116px;
+            padding: 0 14px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            color: white;
+            background: var(--accent);
+            font: inherit;
+            font-size: 14px;
+            font-weight: 650;
+            cursor: pointer;
+        }
+
+        button.secondary {
+            border-color: var(--border);
+            background: var(--panel-2);
+        }
+
+        button.compact {
+            min-width: 0;
+            height: 30px;
+            padding: 0 10px;
+            font-size: 12px;
+        }
+
+        button.danger {
+            background: var(--error);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.48;
+        }
+
+        .workspace {
+            display: grid;
+            grid-template-columns: minmax(320px, 1fr) minmax(280px, 380px);
+            min-height: 0;
+        }
+
+        .video-panel {
+            display: grid;
+            place-items: center;
+            min-width: 0;
+            min-height: 0;
+            padding: 16px;
+            background: #090909;
+        }
+
+        video {
+            width: min(100%, 1280px);
+            max-height: calc(100vh - 250px);
+            aspect-ratio: 16 / 9;
+            border: 1px solid #333;
+            border-radius: 6px;
+            background: #000;
+            object-fit: contain;
+        }
+
+        aside {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            gap: 12px;
+            min-width: 0;
+            border-left: 1px solid var(--border);
+            background: var(--panel);
+            padding: 14px;
+        }
+
+        h2 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 650;
+        }
+
+        .quick-inputs {
+            display: grid;
+            gap: 8px;
+            align-content: start;
+        }
+
+        .log-panel {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 12px;
+            align-items: start;
+            border-top: 1px solid var(--border);
+            border-bottom: 0;
+            padding: 10px 18px;
+        }
+
+        #log {
+            margin: 0;
+            max-height: 130px;
+            overflow: auto;
+            color: var(--muted);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+        }
+
+        @media (max-width: 980px) {
+            main {
+                grid-template-rows: auto auto auto auto;
+            }
+
+            header,
+            .controls,
+            .workspace,
+            .log-panel {
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+
+            .workspace {
+                min-height: auto;
+            }
+
+            aside {
+                border-left: 0;
+                border-top: 1px solid var(--border);
+            }
+
+            video {
+                max-height: 52vh;
+            }
+
+            .status-row,
+            .button-row {
+                justify-content: start;
+            }
         }
     </style>
 </head>
 <body>
+    <main>
+        <header>
+            <h1>Vive Teleop WebRTC Debug</h1>
+            <div class="status-row">
+                <div id="videoStatus" class="status">Video: idle</div>
+                <div id="inputStatus" class="status">Input: idle</div>
+            </div>
+        </header>
 
-    <h1>ROS 2 Camera Stream</h1>
-    <button id="startBtn">Start Stream</button>
-    <div id="status">Status: Waiting to start...</div>
-    <br>
-    <video id="video-stream" autoplay playsinline muted></video>
+        <section class="controls">
+            <label>
+                Server
+                <input id="serverUrl" value="http://localhost:8088" spellcheck="false">
+                <span class="preset-row">
+                    <button id="hostServerBtn" class="secondary compact" type="button">Host :8088</button>
+                    <button id="containerServerBtn" class="secondary compact" type="button">10.68.0.132</button>
+                </span>
+            </label>
+            <label>
+                TURN
+                <input id="turnUrl" value="turn:10.68.0.133:3478" spellcheck="false">
+            </label>
+            <label>
+                User
+                <input id="turnUser" value="dummy" spellcheck="false">
+            </label>
+            <label>
+                Password
+                <input id="turnPassword" value="dummy" type="password" spellcheck="false">
+            </label>
+            <div class="button-row">
+                <label class="relay-toggle">
+                    <input id="relayOnly" type="checkbox" checked>
+                    Relay only
+                </label>
+                <button id="startVideoBtn">Start Video</button>
+                <button id="connectInputBtn" class="secondary">Input</button>
+                <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+            </div>
+        </section>
+
+        <section class="workspace">
+            <div class="video-panel">
+                <video id="videoStream" autoplay playsinline muted></video>
+            </div>
+
+            <aside>
+                <h2>Input Payload</h2>
+                <textarea id="inputPayload" spellcheck="false">{"type":"debug","x":0,"y":0,"z":0}</textarea>
+                <div class="quick-inputs">
+                    <button id="sendInputBtn" disabled>Send Payload</button>
+                    <button id="sendPoseBtn" class="secondary" disabled>Send Pose</button>
+                    <button id="sendStopBtn" class="secondary" disabled>Send Stop</button>
+                </div>
+            </aside>
+        </section>
+
+        <section class="log-panel">
+            <h2>Log</h2>
+            <pre id="log"></pre>
+            <button id="clearLogBtn" class="secondary">Clear</button>
+        </section>
+    </main>
 
     <script>
-        // CRITICAL: Point this exactly to your ipvlan container's IP
-        const SIGNALING_URL = 'http://10.68.0.132:8088/offer';
-        
-        let pc = null;
+        const serverUrlEl = document.getElementById('serverUrl');
+        const turnUrlEl = document.getElementById('turnUrl');
+        const turnUserEl = document.getElementById('turnUser');
+        const turnPasswordEl = document.getElementById('turnPassword');
+        const relayOnlyEl = document.getElementById('relayOnly');
+        const startVideoBtn = document.getElementById('startVideoBtn');
+        const connectInputBtn = document.getElementById('connectInputBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const hostServerBtn = document.getElementById('hostServerBtn');
+        const containerServerBtn = document.getElementById('containerServerBtn');
+        const sendInputBtn = document.getElementById('sendInputBtn');
+        const sendPoseBtn = document.getElementById('sendPoseBtn');
+        const sendStopBtn = document.getElementById('sendStopBtn');
+        const clearLogBtn = document.getElementById('clearLogBtn');
+        const inputPayloadEl = document.getElementById('inputPayload');
+        const videoEl = document.getElementById('videoStream');
+        const videoStatusEl = document.getElementById('videoStatus');
+        const inputStatusEl = document.getElementById('inputStatus');
+        const logEl = document.getElementById('log');
 
-        async function startStream() {
-            const statusEl = document.getElementById('status');
-            const startBtn = document.getElementById('startBtn');
-            
-            startBtn.disabled = true;
-            statusEl.innerText = "Status: Connecting to backend...";
-            statusEl.style.color = "#ffeb3b"; // Yellow
-            
-            // 1. Create Peer Connection
-            const config = {
-                sdpSemantics: 'unified-plan',
-                iceTransportPolicy: 'relay',
-                iceServers: [
-                    { urls: ['stun:stun.l.google.com:19302'] },
-                    // Including your coturn server from docker-compose
-                    { urls: ['turn:10.68.0.133:3478'],
-                      username: 'dummy',
-                      credential: 'dummy'
-                     } 
-                ]
-            };
+        let videoPc = null;
+        let inputPc = null;
+        let inputChannel = null;
 
-            pc = new RTCPeerConnection(config);
+        const params = new URLSearchParams(window.location.search);
+        serverUrlEl.value = hostServerUrl();
 
-            // 2. Setup track handling (when the video arrives)
-            pc.addEventListener('track', function(evt) {
-                if (evt.track.kind === 'video') {
-                    document.getElementById('video-stream').srcObject = evt.streams[0];
-                    statusEl.innerText = "Status: Connected & Streaming!";
-                    statusEl.style.color = "#4CAF50"; // Green
-                }
-            });
+        if (params.has('server')) {
+            serverUrlEl.value = params.get('server');
+        }
 
-            // Monitor connection health
-            pc.addEventListener('iceconnectionstatechange', function() {
-                console.log("ICE State:", pc.iceConnectionState);
-                if(pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-                    statusEl.innerText = "Status: Connection Failed (ICE Error)";
-                    statusEl.style.color = "#f44336"; // Red
-                    startBtn.disabled = false;
-                }
-            });
-
-            // Tell the backend we only want to receive video, not send it
-            pc.addTransceiver('video', { direction: 'recvonly' });
-
-            try {
-                // 3. Create Offer
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-
-                // 4. Wait for ICE gathering to complete before sending
-                // This injects the host IPs into the SDP so aiortc can see them
-                await new Promise((resolve) => {
-                    if (pc.iceGatheringState === 'complete') {
-                        resolve();
-                    } else {
-                        const checkState = () => {
-                            if (pc.iceGatheringState === 'complete') {
-                                pc.removeEventListener('icegatheringstatechange', checkState);
-                                resolve();
-                            }
-                        };
-                        pc.addEventListener('icegatheringstatechange', checkState);
-                        
-                        // Failsafe timeout so it doesn't hang forever
-                        setTimeout(() => {
-                            pc.removeEventListener('icegatheringstatechange', checkState);
-                            resolve();
-                        }, 2000); 
-                    }
-                });
-
-                // 5. Send the compiled Offer to the ROS 2 container
-                statusEl.innerText = "Status: Exchanging WebRTC Keys...";
-                const response = await fetch(SIGNALING_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sdp: pc.localDescription.sdp,
-                        type: pc.localDescription.type
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Backend responded with HTTP ${response.status}`);
-                }
-
-                // 6. Receive Answer and set Remote Description
-                const answer = await response.json();
-                await pc.setRemoteDescription(answer);
-
-            } catch (e) {
-                console.error("WebRTC Setup Error:", e);
-                statusEl.innerText = "Status: Error - " + e.message;
-                statusEl.style.color = "#f44336";
-                startBtn.disabled = false;
+        function setStatus(element, text, tone) {
+            element.textContent = text;
+            element.className = 'status';
+            if (tone) {
+                element.classList.add(tone);
             }
         }
 
-        document.getElementById('startBtn').addEventListener('click', startStream);
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            logEl.textContent = `[${timestamp}] ${message}\n${logEl.textContent}`;
+        }
+
+        function endpoint(path) {
+            return `${serverUrlEl.value.replace(/\/+$/, '')}${path}`;
+        }
+
+        function hostServerUrl() {
+            const host = window.location.hostname;
+            const targetHost = !host || host === '0.0.0.0' ? 'localhost' : host;
+            const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+            return `${protocol}//${targetHost}:8088`;
+        }
+
+        function describeFetchError(error, path) {
+            const target = endpoint(path);
+
+            if (error instanceof TypeError) {
+                return [
+                    `Cannot fetch ${target}.`,
+                    'Try Host :8088 first for the README flow.',
+                    'Use 10.68.0.132 only when this browser can route to the ipvlan container.',
+                    'Also check that ros2_app is running and CORS errors are not shown in the browser console.',
+                ].join(' ');
+            }
+
+            return error.message;
+        }
+
+        function peerConfig() {
+            const iceServers = [{ urls: ['stun:stun.l.google.com:19302'] }];
+            const turnUrl = turnUrlEl.value.trim();
+
+            if (turnUrl) {
+                iceServers.push({
+                    urls: [turnUrl],
+                    username: turnUserEl.value,
+                    credential: turnPasswordEl.value,
+                });
+            }
+
+            return {
+                sdpSemantics: 'unified-plan',
+                iceTransportPolicy: relayOnlyEl.checked ? 'relay' : 'all',
+                iceServers,
+            };
+        }
+
+        function updateButtons() {
+            const inputOpen = inputChannel && inputChannel.readyState === 'open';
+            startVideoBtn.disabled = Boolean(videoPc);
+            connectInputBtn.disabled = Boolean(inputPc);
+            disconnectBtn.disabled = !videoPc && !inputPc;
+            sendInputBtn.disabled = !inputOpen;
+            sendPoseBtn.disabled = !inputOpen;
+            sendStopBtn.disabled = !inputOpen;
+        }
+
+        function waitForIceGathering(pc) {
+            return new Promise((resolve) => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                    return;
+                }
+
+                const timeout = window.setTimeout(() => {
+                    pc.removeEventListener('icegatheringstatechange', onStateChange);
+                    resolve();
+                }, 3000);
+
+                function onStateChange() {
+                    if (pc.iceGatheringState === 'complete') {
+                        window.clearTimeout(timeout);
+                        pc.removeEventListener('icegatheringstatechange', onStateChange);
+                        resolve();
+                    }
+                }
+
+                pc.addEventListener('icegatheringstatechange', onStateChange);
+            });
+        }
+
+        async function exchangeOffer(pc, path) {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await waitForIceGathering(pc);
+
+            const response = await fetch(endpoint(path), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type,
+                }),
+            });
+
+            if (!response.ok) {
+                const body = await response.text();
+                throw new Error(`${path} HTTP ${response.status}${body ? `: ${body}` : ''}`);
+            }
+
+            await pc.setRemoteDescription(await response.json());
+        }
+
+        function attachStateLogging(pc, label, statusEl) {
+            pc.addEventListener('iceconnectionstatechange', () => {
+                log(`${label} ICE ${pc.iceConnectionState}`);
+                if (pc.iceConnectionState === 'failed') {
+                    setStatus(statusEl, `${label}: ICE failed`, 'error');
+                    updateButtons();
+                }
+            });
+
+            pc.addEventListener('connectionstatechange', () => {
+                log(`${label} connection ${pc.connectionState}`);
+                if (pc.connectionState === 'connected') {
+                    setStatus(statusEl, `${label}: connected`, 'ok');
+                } else if (pc.connectionState === 'failed') {
+                    setStatus(statusEl, `${label}: failed`, 'error');
+                } else if (pc.connectionState === 'closed') {
+                    setStatus(statusEl, `${label}: closed`);
+                }
+                updateButtons();
+            });
+        }
+
+        async function startVideo() {
+            videoPc = new RTCPeerConnection(peerConfig());
+            attachStateLogging(videoPc, 'Video', videoStatusEl);
+            setStatus(videoStatusEl, 'Video: signaling', 'warn');
+            updateButtons();
+
+            videoPc.addEventListener('track', (event) => {
+                if (event.track.kind === 'video') {
+                    videoEl.srcObject = event.streams[0];
+                    setStatus(videoStatusEl, 'Video: media', 'ok');
+                    log('Video track attached');
+                }
+            });
+
+            videoPc.addTransceiver('video', { direction: 'recvonly' });
+
+            try {
+                await exchangeOffer(videoPc, '/offer');
+                setStatus(videoStatusEl, 'Video: answer', 'warn');
+                log(`Video offer answered by ${endpoint('/offer')}`);
+            } catch (error) {
+                log(`Video error: ${describeFetchError(error, '/offer')}`);
+                setStatus(videoStatusEl, 'Video: error', 'error');
+                await closeVideo();
+            } finally {
+                updateButtons();
+            }
+        }
+
+        async function connectInput() {
+            inputPc = new RTCPeerConnection(peerConfig());
+            attachStateLogging(inputPc, 'Input', inputStatusEl);
+            inputChannel = inputPc.createDataChannel('input');
+            setStatus(inputStatusEl, 'Input: signaling', 'warn');
+            updateButtons();
+
+            inputChannel.addEventListener('open', () => {
+                setStatus(inputStatusEl, 'Input: open', 'ok');
+                log('Input data channel open');
+                updateButtons();
+            });
+
+            inputChannel.addEventListener('close', () => {
+                setStatus(inputStatusEl, 'Input: closed');
+                log('Input data channel closed');
+                updateButtons();
+            });
+
+            inputChannel.addEventListener('error', (event) => {
+                setStatus(inputStatusEl, 'Input: channel error', 'error');
+                log(`Input channel error: ${event.message || 'unknown'}`);
+                updateButtons();
+            });
+
+            try {
+                await exchangeOffer(inputPc, '/input_offer');
+                setStatus(inputStatusEl, 'Input: answer', 'warn');
+                log(`Input offer answered by ${endpoint('/input_offer')}`);
+            } catch (error) {
+                log(`Input error: ${describeFetchError(error, '/input_offer')}`);
+                setStatus(inputStatusEl, 'Input: error', 'error');
+                await closeInput();
+            } finally {
+                updateButtons();
+            }
+        }
+
+        function sendInput(payload) {
+            if (!inputChannel || inputChannel.readyState !== 'open') {
+                log('Input data channel is not open');
+                return;
+            }
+
+            inputChannel.send(payload);
+            log(`Sent input: ${payload}`);
+        }
+
+        async function closeVideo() {
+            if (videoPc) {
+                videoPc.close();
+            }
+            videoPc = null;
+            videoEl.srcObject = null;
+            setStatus(videoStatusEl, 'Video: idle');
+        }
+
+        async function closeInput() {
+            if (inputChannel) {
+                inputChannel.close();
+            }
+            if (inputPc) {
+                inputPc.close();
+            }
+            inputChannel = null;
+            inputPc = null;
+            setStatus(inputStatusEl, 'Input: idle');
+        }
+
+        async function disconnectAll() {
+            await closeVideo();
+            await closeInput();
+            updateButtons();
+            log('Disconnected');
+        }
+
+        startVideoBtn.addEventListener('click', startVideo);
+        connectInputBtn.addEventListener('click', connectInput);
+        disconnectBtn.addEventListener('click', disconnectAll);
+        hostServerBtn.addEventListener('click', () => {
+            serverUrlEl.value = hostServerUrl();
+            log(`Server set to ${serverUrlEl.value}`);
+        });
+        containerServerBtn.addEventListener('click', () => {
+            serverUrlEl.value = 'http://10.68.0.132:8088';
+            log(`Server set to ${serverUrlEl.value}`);
+        });
+        sendInputBtn.addEventListener('click', () => sendInput(inputPayloadEl.value));
+        sendPoseBtn.addEventListener('click', () => {
+            sendInput(JSON.stringify({
+                type: 'pose',
+                position: { x: 0.1, y: 1.2, z: -0.3 },
+                rotation: { x: 0, y: 0, z: 0, w: 1 },
+                timestamp: Date.now(),
+            }));
+        });
+        sendStopBtn.addEventListener('click', () => {
+            sendInput(JSON.stringify({ type: 'stop', timestamp: Date.now() }));
+        });
+        clearLogBtn.addEventListener('click', () => {
+            logEl.textContent = '';
+        });
+        window.addEventListener('beforeunload', disconnectAll);
+
+        updateButtons();
+        log(`Ready for ${serverUrlEl.value}`);
     </script>
 </body>
 </html>

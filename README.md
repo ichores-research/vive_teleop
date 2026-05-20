@@ -26,7 +26,10 @@ It runs on ROS2 Humble.
 ### Why is it needed?
 To isolate subscriber/publisher logic from peripheral devices and allow easier changes in future.
 It will have API with explanation on how to consume such endpoints in future.
-For now it should expose WebRTC server with raw camera image on 0.0.0.0:8088/offer
+For now it exposes WebRTC signaling on 0.0.0.0:8088:
+
+- `/offer` answers receive-only video peers with the raw camera image from `/xtion/rgb/image_raw`.
+- `/input_offer` answers WebRTC data-channel peers and forwards received messages to the mock ROS2 publisher on `/vive/input_mock`.
 
 ## unity-vr-headset
 
