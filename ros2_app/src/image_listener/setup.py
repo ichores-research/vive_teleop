@@ -19,6 +19,7 @@ setup(
     entry_points={
         "console_scripts": [
             "image_subscriber = image_listener.image_subscriber:main",
+            "teleop_webrtc = image_listener.teleop_webrtc:main",
         ],
     },
 )
