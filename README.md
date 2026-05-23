@@ -77,6 +77,36 @@ Open:
 http://localhost:8000
 ```
 
+### Wi-Fi WebRTC access
+
+The robot-facing Docker network can stay on the static Ethernet `10.68.0.0/24` layout while WebRTC signaling and TURN are exposed through the Docker host's current Wi-Fi/default-route IP.
+
+Start the containers with the Wi-Fi overlay:
+
+```bash
+./scripts/up-wifi-webrtc.sh
+```
+
+If the default route is not the Wi-Fi interface, specify the interface instead of hard-coding the address:
+
+```bash
+WEBRTC_NIC=wlan0 ./scripts/up-wifi-webrtc.sh
+```
+
+The script detects the current host IP, exports `WEBRTC_HOST_IP`, and starts:
+
+- `ros2_app` on the original `field_net` plus a normal Docker bridge so `8088:8088` is reachable through the host.
+- `coturn_wifi` on the host network, bound to the detected host IP.
+- server-side ICE with `WEBRTC_TURN_URLS=turn:<detected-host-ip>:3478?...`.
+
+Serve the debug client on Wi-Fi:
+
+```bash
+./scripts/serve-debug-client.sh
+```
+
+Open the printed `http://<host-ip>:8000` URL from a device on the same Wi-Fi. The debug page derives `Server` as `http://<host-ip>:8088` and UDP/TCP `TURN` URLs from the same host.
+
 For browser debugging:
 
 1. Wait for `ros2_app` logs to show `Bridge topic detected`.

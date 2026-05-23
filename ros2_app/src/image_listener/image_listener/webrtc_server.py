@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import json
+import os
 from typing import Any, Callable
 
 from aiohttp import web
@@ -14,18 +15,39 @@ from aiortc import (
 from aiortc.contrib.media import MediaRelay
 
 
-DEFAULT_ICE_CONFIG = RTCConfiguration(
-    iceServers=[
-        RTCIceServer(
-            urls=[
-                "turn:10.68.0.133:3478?transport=udp",
-                "turn:10.68.0.133:3478?transport=tcp",
-            ],
-            username="dummy",
-            credential="dummy",
-        )
-    ]
+DEFAULT_TURN_URLS = (
+    "turn:10.68.0.133:3478?transport=udp",
+    "turn:10.68.0.133:3478?transport=tcp",
 )
+
+
+def _csv_values(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def ice_config_from_env() -> RTCConfiguration:
+    if "WEBRTC_TURN_URLS" in os.environ:
+        turn_urls = _csv_values(os.environ["WEBRTC_TURN_URLS"])
+    elif "WEBRTC_TURN_URL" in os.environ:
+        turn_urls = _csv_values(os.environ["WEBRTC_TURN_URL"])
+    else:
+        turn_urls = list(DEFAULT_TURN_URLS)
+
+    if not turn_urls:
+        return RTCConfiguration(iceServers=[])
+
+    return RTCConfiguration(
+        iceServers=[
+            RTCIceServer(
+                urls=turn_urls,
+                username=os.environ.get("WEBRTC_TURN_USER", "dummy"),
+                credential=os.environ.get("WEBRTC_TURN_PASSWORD", "dummy"),
+            )
+        ]
+    )
+
+
+DEFAULT_ICE_CONFIG = ice_config_from_env()
 
 PeerSetupCallback = Callable[[RTCPeerConnection, dict[str, Any]], Any]
 MessageCallback = Callable[[str | bytes], Any]

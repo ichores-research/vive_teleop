@@ -1,0 +1,33 @@
+services:
+  ros2_app:
+    depends_on:
+      - coturn_wifi
+    environment:
+      - WEBRTC_TURN_URLS=${WEBRTC_TURN_URLS:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_TURN_URLS}
+      - WEBRTC_TURN_USER=${TURN_USER:-dummy}
+      - WEBRTC_TURN_PASSWORD=${TURN_PASSWORD:-dummy}
+    networks:
+      web_net: {}
+
+  coturn_wifi:
+    image: coturn/coturn:latest
+    container_name: coturn_wifi
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --listening-ip=${WEBRTC_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_HOST_IP}
+      - --relay-ip=${WEBRTC_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_HOST_IP}
+      - --external-ip=${WEBRTC_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_HOST_IP}
+      - --min-port=49160
+      - --max-port=49200
+      - --realm=local
+      - --lt-cred-mech
+      - --user=${TURN_USER:-dummy}:${TURN_PASSWORD:-dummy}
+      - --no-tls
+      - --no-dtls
+      - --log-file=stdout
+      - --verbose
+
+networks:
+  web_net:
+    driver: bridge
