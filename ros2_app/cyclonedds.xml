@@ -2,7 +2,7 @@
 <CycloneDDS xmlns="https://cyclonedds.io/xml">
   <Domain Id="any">
     <General>
-      <NetworkInterfaceAddress>auto</NetworkInterfaceAddress>
+      <NetworkInterfaceAddress>10.68.0.132</NetworkInterfaceAddress>
       <AllowMulticast>default</AllowMulticast>
     </General>
     <Discovery>
