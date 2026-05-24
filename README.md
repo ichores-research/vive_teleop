@@ -93,11 +93,22 @@ If the default route is not the Wi-Fi interface, specify the interface instead o
 WEBRTC_NIC=wlan0 ./scripts/up-wifi-webrtc.sh
 ```
 
-The script detects the current host IP, exports `WEBRTC_HOST_IP`, and starts:
+The script detects the current Wi-Fi host IP, exports `WEBRTC_HOST_IP`, detects the field-network host IP as `ROS_FIELD_HOST_IP`, generates a matching CycloneDDS config, and starts host-network Wi-Fi variants:
 
-- `ros2_app` on the original `field_net` plus a normal Docker bridge so `8088:8088` is reachable through the host.
-- `coturn_wifi` on the host network, bound to the detected host IP.
-- server-side ICE with `WEBRTC_TURN_URLS=turn:<detected-host-ip>:3478?...`.
+- `ros1_bridge_wifi` on the host network, using the static robot Ethernet interface for ROS1 robot access.
+- `ros2_app_wifi` on the host network, so WebRTC signaling and media are reachable through the host Wi-Fi IP.
+- `coturn_wifi` on the host network, listening on both the Wi-Fi IP and the field-network host IP.
+- local ROS2 bridge/app discovery over loopback by default with `ROS2_DDS_INTERFACE=lo`.
+- client-side ICE with `WEBRTC_PUBLIC_TURN_URLS=turn:<wifi-host-ip>:3478?...`.
+- server-side ICE with `WEBRTC_TURN_URLS=turn:<wifi-host-ip>:3478?...`.
+
+This avoids passing WebRTC media through Docker port publishing; Unity and browser clients talk directly to the host Wi-Fi IP.
+
+If another ROS2 node outside this host must discover the Wi-Fi bridge/app, override the DDS interface with the host's field-network IP:
+
+```bash
+ROS2_DDS_INTERFACE=10.68.0.130 ./scripts/up-wifi-webrtc.sh
+```
 
 Serve the debug client on Wi-Fi:
 
@@ -107,12 +118,20 @@ Serve the debug client on Wi-Fi:
 
 Open the printed `http://<host-ip>:8000` URL from a device on the same Wi-Fi. The debug page derives `Server` as `http://<host-ip>:8088` and UDP/TCP `TURN` URLs from the same host.
 
+External clients such as Unity should use the WebRTC server config endpoint:
+
+```text
+http://<host-ip>:8088/config
+```
+
+It returns the signaling URLs and client-facing ICE server list.
+
 For browser debugging:
 
-1. Wait for `ros2_app` logs to show `Bridge topic detected`.
-2. Wait for `======== Running on http://0.0.0.0:8088 ========`.
-3. In the debug page, try `Host :8088` first.
-4. If fetches to `/offer` fail, try `10.68.0.132`.
+1. Wait for `ros2_app_wifi` logs to show `======== Running on http://0.0.0.0:8088 ========`.
+2. Check that `ros1_bridge_wifi` logs do not show ROS master connection errors.
+3. If the debug page is served by this host, try `Host :8088` first.
+4. If the debug page is served from another PC, set `Server` to `http://<host-ip>:8088` manually.
 5. Click `Start Video` to connect to `/offer`.
 6. Click `Input` to connect to `/input_offer`, then send a payload.
 

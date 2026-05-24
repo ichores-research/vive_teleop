@@ -49,6 +49,55 @@ def ice_config_from_env() -> RTCConfiguration:
 
 DEFAULT_ICE_CONFIG = ice_config_from_env()
 
+
+def public_turn_urls_from_env() -> list[str]:
+    if "WEBRTC_PUBLIC_TURN_URLS" in os.environ:
+        return _csv_values(os.environ["WEBRTC_PUBLIC_TURN_URLS"])
+    if "WEBRTC_PUBLIC_TURN_URL" in os.environ:
+        return _csv_values(os.environ["WEBRTC_PUBLIC_TURN_URL"])
+    if "WEBRTC_TURN_URLS" in os.environ:
+        return _csv_values(os.environ["WEBRTC_TURN_URLS"])
+    if "WEBRTC_TURN_URL" in os.environ:
+        return _csv_values(os.environ["WEBRTC_TURN_URL"])
+    return list(DEFAULT_TURN_URLS)
+
+
+def _ice_server_dict(urls: list[str]) -> dict[str, Any]:
+    return {
+        "urls": urls,
+        "username": os.environ.get("WEBRTC_TURN_USER", "dummy"),
+        "credential": os.environ.get("WEBRTC_TURN_PASSWORD", "dummy"),
+    }
+
+
+def _ice_config_urls(ice_config: RTCConfiguration) -> list[str]:
+    urls: list[str] = []
+    for server in ice_config.iceServers or []:
+        if isinstance(server.urls, str):
+            urls.append(server.urls)
+        else:
+            urls.extend(server.urls)
+    return urls
+
+
+def _candidate_summary(sdp: str | None) -> str:
+    counts: dict[str, int] = {}
+    for line in (sdp or "").splitlines():
+        if not line.startswith("a=candidate:"):
+            continue
+        parts = line.split()
+        if "typ" in parts:
+            candidate_type = parts[parts.index("typ") + 1]
+        else:
+            candidate_type = "unknown"
+        counts[candidate_type] = counts.get(candidate_type, 0) + 1
+
+    if not counts:
+        return "none"
+
+    return ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+
+
 PeerSetupCallback = Callable[[RTCPeerConnection, dict[str, Any]], Any]
 MessageCallback = Callable[[str | bytes], Any]
 
@@ -81,6 +130,22 @@ class WebRTCServer:
             },
         )
         self._app.on_shutdown.append(self._on_shutdown)
+        self._add_config_routes()
+        print(
+            "WebRTC server ICE URLs: "
+            f"{', '.join(_ice_config_urls(self._ice_config)) or 'none'}",
+            flush=True,
+        )
+        print(
+            "WebRTC public TURN URLs: "
+            f"{', '.join(public_turn_urls_from_env()) or 'none'}",
+            flush=True,
+        )
+
+    def _add_config_routes(self) -> None:
+        for path in ("/", "/config", "/healthz"):
+            route = self._app.router.add_get(path, self._handle_config)
+            self._cors.add(route)
 
     def add_video_route(self, path: str, video_track: Any) -> None:
         def setup_video_peer(pc: RTCPeerConnection, _params: dict[str, Any]) -> None:
@@ -123,9 +188,33 @@ class WebRTCServer:
 
         pc = RTCPeerConnection(configuration=self._ice_config)
         self._pcs.add(pc)
+        request_path = request.path
+        print(
+            f"WebRTC offer received on {request_path} from {request.remote}; "
+            f"remote candidates: {_candidate_summary(sdp_offer.sdp)}",
+            flush=True,
+        )
+
+        @pc.on("icegatheringstatechange")
+        def on_icegatheringstatechange():
+            print(
+                f"{request_path} ICE gathering state: {pc.iceGatheringState}",
+                flush=True,
+            )
+
+        @pc.on("iceconnectionstatechange")
+        def on_iceconnectionstatechange():
+            print(
+                f"{request_path} ICE connection state: {pc.iceConnectionState}",
+                flush=True,
+            )
 
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
+            print(
+                f"{request_path} connection state: {pc.connectionState}",
+                flush=True,
+            )
             if pc.connectionState in ("failed", "closed"):
                 await pc.close()
                 self._pcs.discard(pc)
@@ -139,6 +228,11 @@ class WebRTCServer:
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
             await self._wait_for_ice_gathering(pc)
+            print(
+                f"{request_path} local answer candidates: "
+                f"{_candidate_summary(pc.localDescription.sdp)}",
+                flush=True,
+            )
 
             return web.Response(
                 content_type="application/json",
@@ -153,6 +247,27 @@ class WebRTCServer:
             await pc.close()
             self._pcs.discard(pc)
             raise
+
+    async def _handle_config(self, request: web.Request) -> web.Response:
+        public_host = os.environ.get("WEBRTC_PUBLIC_HOST")
+        if not public_host:
+            public_host = request.host.rsplit(":", 1)[0]
+
+        server_url = f"{request.scheme}://{public_host}:{self.port}"
+        public_turn_urls = public_turn_urls_from_env()
+
+        return web.json_response(
+            {
+                "status": "ok",
+                "serverUrl": server_url,
+                "offerUrl": f"{server_url}/offer",
+                "inputOfferUrl": f"{server_url}/input_offer",
+                "iceServers": [_ice_server_dict(public_turn_urls)]
+                if public_turn_urls
+                else [],
+                "serverIceUrls": _ice_config_urls(self._ice_config),
+            }
+        )
 
     async def _wait_for_ice_gathering(self, pc: RTCPeerConnection) -> None:
         start = asyncio.get_event_loop().time()
