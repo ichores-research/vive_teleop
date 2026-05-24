@@ -210,7 +210,8 @@ Transform:
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 1773870471}
   m_Father: {fileID: 1406465867}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &330585547
@@ -557,6 +558,8 @@ GameObject:
   - component: {fileID: 1773870470}
   - component: {fileID: 1773870469}
   - component: {fileID: 1773870468}
+  - component: {fileID: 1773870472}
+  - component: {fileID: 1773870473}
   m_Layer: 0
   m_Name: Quad
   m_TagString: Untagged
@@ -648,17 +651,90 @@ Transform:
   m_GameObject: {fileID: 1773870467}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 1.5, z: 2}
-  m_LocalScale: {x: 2, y: 2, z: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 1.8}
+  m_LocalScale: {x: 1.6, y: 1.2, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 0}
+  m_Father: {fileID: 330585546}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1773870472
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1773870467}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4a2d2f7d38ad4ed4a8f1fc0a9af93412, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  configUrl: http://192.168.1.96:8088/config
+  fallbackServerUrl: http://192.168.1.96:8088
+  connectOnStart: 1
+  iceGatheringTimeoutSeconds: 10
+  connectVideo: 1
+  targetRenderer: {fileID: 1773870469}
+  texturePropertyNames:
+  - _BaseMap
+  - _MainTex
+  headLockDisplay: 1
+  displayCamera: {fileID: 330585546}
+  headLockedLocalPosition: {x: 0, y: 0, z: 1.8}
+  headLockedLocalEulerAngles: {x: 0, y: 0, z: 0}
+  headLockedLocalScale: {x: 1.6, y: 1.2, z: 1}
+  connectInput: 1
+  sendHmdPose: 1
+  poseSource: {fileID: 0}
+  poseSendRateHz: 30
+  sendPoseWhenChannelOpens: 1
+  sendJoystickWristPose: 1
+  wristPoseSource: {fileID: 0}
+  wristXrNode: 5
+  calibrateWristOnFirstSample: 1
+  wristRotationOffsetEuler: {x: 0, y: 0, z: 0}
+  recalibrateWristKey: 114
+--- !u!114 &1773870473
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1773870467}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4a2d2f7d38ad4ed4a8f1fc0a9af93412, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  configUrl: http://192.168.1.96:8088/config
+  fallbackServerUrl: http://192.168.1.96:8088
+  connectOnStart: 1
+  iceGatheringTimeoutSeconds: 10
+  connectVideo: 1
+  targetRenderer: {fileID: 0}
+  texturePropertyNames:
+  - _BaseMap
+  - _MainTex
+  headLockDisplay: 1
+  displayCamera: {fileID: 0}
+  headLockedLocalPosition: {x: 0, y: 0, z: 1.8}
+  headLockedLocalEulerAngles: {x: 0, y: 0, z: 0}
+  headLockedLocalScale: {x: 1.6, y: 1.2, z: 1}
+  connectInput: 1
+  sendHmdPose: 1
+  poseSource: {fileID: 0}
+  poseSendRateHz: 30
+  sendPoseWhenChannelOpens: 1
+  sendJoystickWristPose: 1
+  wristPoseSource: {fileID: 0}
+  wristXrNode: 5
+  calibrateWristOnFirstSample: 1
+  wristRotationOffsetEuler: {x: 0, y: 0, z: 0}
+  recalibrateWristKey: 114
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
   - {fileID: 410087041}
   - {fileID: 832575519}
-  - {fileID: 1773870471}
   - {fileID: 1678298199}

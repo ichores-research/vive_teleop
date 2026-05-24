@@ -21,8 +21,9 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "image_subscriber\nROS2 node" as ImageSubscriber
     component "LatestFrameVideoTrack" as VideoTrack
     component "WebRTCServer\naiohttp + aiortc" as WebRTCServer
-    component "MockInputPublisher\nROS2 node" as InputPublisher
+    component "InputPublisher\nROS2 node" as InputPublisher
     queue "ROS2 topic\n/vive/input_mock" as InputTopic
+    queue "ROS2 topic\n/vive/robot_wrist_orientation" as WristTopic
   }
 
   node "coturn container\n10.68.0.133:3478" as Coturn {
@@ -40,6 +41,7 @@ ImageSubscriber --> VideoTrack : latest BGR frame
 VideoTrack --> WebRTCServer : media track
 WebRTCServer --> InputPublisher : data-channel messages
 InputPublisher --> InputTopic : std_msgs/String
+InputPublisher --> WristTopic : geometry_msgs/QuaternionStamped
 
 StaticServer --> Browser : serves index.html
 Browser --> WebRTCServer : HTTP POST /offer\nSDP offer/answer

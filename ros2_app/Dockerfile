@@ -13,6 +13,7 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-cv-bridge \
+    ros-humble-geometry-msgs \
     ros-humble-vision-opencv \
     python3-colcon-common-extensions \
     python3-pip \
