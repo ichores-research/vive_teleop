@@ -559,6 +559,7 @@ GameObject:
   - component: {fileID: 1773870469}
   - component: {fileID: 1773870468}
   - component: {fileID: 1773870472}
+  - component: {fileID: 1773870473}
   m_Layer: 0
   m_Name: Quad
   m_TagString: Untagged
@@ -666,10 +667,10 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 4a2d2f7d38ad4ed4a8f1fc0a9af93412, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
-  configUrl: http://localhost:8088/config
-  fallbackServerUrl: http://localhost:8088
+  m_Name: 
+  m_EditorClassIdentifier: 
+  configUrl: http://192.168.1.96:8088/config
+  fallbackServerUrl: http://192.168.1.96:8088
   connectOnStart: 1
   iceGatheringTimeoutSeconds: 10
   connectVideo: 1
@@ -679,6 +680,43 @@ MonoBehaviour:
   - _MainTex
   headLockDisplay: 1
   displayCamera: {fileID: 330585546}
+  headLockedLocalPosition: {x: 0, y: 0, z: 1.8}
+  headLockedLocalEulerAngles: {x: 0, y: 0, z: 0}
+  headLockedLocalScale: {x: 1.6, y: 1.2, z: 1}
+  connectInput: 1
+  sendHmdPose: 1
+  poseSource: {fileID: 0}
+  poseSendRateHz: 30
+  sendPoseWhenChannelOpens: 1
+  sendJoystickWristPose: 1
+  wristPoseSource: {fileID: 0}
+  wristXrNode: 5
+  calibrateWristOnFirstSample: 1
+  wristRotationOffsetEuler: {x: 0, y: 0, z: 0}
+  recalibrateWristKey: 114
+--- !u!114 &1773870473
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1773870467}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4a2d2f7d38ad4ed4a8f1fc0a9af93412, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  configUrl: http://192.168.1.96:8088/config
+  fallbackServerUrl: http://192.168.1.96:8088
+  connectOnStart: 1
+  iceGatheringTimeoutSeconds: 10
+  connectVideo: 1
+  targetRenderer: {fileID: 0}
+  texturePropertyNames:
+  - _BaseMap
+  - _MainTex
+  headLockDisplay: 1
+  displayCamera: {fileID: 0}
   headLockedLocalPosition: {x: 0, y: 0, z: 1.8}
   headLockedLocalEulerAngles: {x: 0, y: 0, z: 0}
   headLockedLocalScale: {x: 1.6, y: 1.2, z: 1}
