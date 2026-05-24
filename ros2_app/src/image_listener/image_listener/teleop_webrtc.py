@@ -5,7 +5,7 @@ import rclpy
 from rclpy.executors import MultiThreadedExecutor
 
 from .image_subscriber import DEFAULT_IMAGE_TOPIC, ImageSubscriber
-from .input_publisher import MockInputPublisher
+from .input_publisher import WebRtcInputPublisher
 from .video_track import LatestFrameVideoTrack
 from .webrtc_server import WebRTCServer
 
@@ -22,7 +22,7 @@ def main(args=None):
         event_loop=loop,
         image_topic=DEFAULT_IMAGE_TOPIC,
     )
-    input_publisher = MockInputPublisher()
+    input_publisher = WebRtcInputPublisher()
 
     executor = MultiThreadedExecutor()
     executor.add_node(image_subscriber)

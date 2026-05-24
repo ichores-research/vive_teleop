@@ -18,7 +18,7 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
 - `image_listener/image_subscriber.py`: ROS2 image subscriber for `/xtion/rgb/image_raw`.
 - `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
-- `image_listener/input_publisher.py`: mock ROS2 publisher for WebRTC input messages on `/vive/input_mock`.
+- `image_listener/input_publisher.py`: ROS2 publisher for raw WebRTC input messages on `/vive/input_mock` and calibrated wrist orientation commands on `/vive/robot_wrist_orientation`.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
 See [architecture.puml](architecture.puml) for the PlantUML source. Existing rendered reference: [architecture.png](architecture.png).
@@ -53,9 +53,15 @@ Client expectation:
 
 ### `POST /input_offer`
 
-Accepts a WebRTC offer for an input data channel and returns an answer. Messages received on the data channel are forwarded to the mock ROS2 publisher on `/vive/input_mock`.
+Accepts a WebRTC offer for an input data channel and returns an answer. Messages received on the data channel are forwarded to the raw ROS2 debug topic `/vive/input_mock`.
 
 String payloads are published as-is. Binary payloads are encoded as JSON with base64 data.
+
+When a Unity payload includes `wristAvailable: true` and `robotWristR*` quaternion fields, `ros2_app` also publishes `geometry_msgs/QuaternionStamped` on `/vive/robot_wrist_orientation`. Subscribe the robot wrist controller to that topic to copy the calibrated joystick wrist rotation.
+
+```bash
+ros2 topic echo /vive/robot_wrist_orientation
+```
 
 ## Running
 
@@ -139,8 +145,27 @@ For Unity:
 
 1. Start the containers.
 2. Launch Unity and open `unity-vr-headset`.
-3. Launch SteamVR.
-4. Press Play.
+3. Open `Assets/Scenes/SampleScene.unity`.
+4. Select `Quad` and set `Vive Teleop Web RTC Client > Config Url` to `http://<host-ip>:8088/config` if Unity is not running on the Docker host.
+5. Launch SteamVR.
+6. Press Play.
+
+The Unity scene includes `ViveTeleopWebRtcClient` on the video quad. The quad is parented to the XR camera and kept centered in front of the headset, so it stays visible in a Vive Pro / Vive Pro 2 view. The component fetches `/config`, connects video through `/offer`, opens an input data channel through `/input_offer`, renders the received video onto the quad material, and sends teleop JSON over the data channel.
+
+By default the input payload includes:
+
+- HMD pose from the main camera.
+- Right-hand XR controller / 6-DoF joystick wrist pose from `XRNode.RightHand`.
+- A calibrated relative `robotWristR*` quaternion, published by `ros2_app` as `/vive/robot_wrist_orientation`.
+- Joystick axis, trigger, grip, and primary button values when the device exposes them through Unity XR.
+
+Press `R` in the Unity player to recalibrate the current wrist orientation as neutral. If the joystick is represented by a custom tracked GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`; otherwise the right-hand XR node is used.
+
+Builds can override the scene URL with either `VIVE_TELEOP_WEBRTC_CONFIG_URL` or a command-line argument:
+
+```bash
+--webrtc-config-url=http://<host-ip>:8088/config
+```
 
 ## Troubleshooting
 
