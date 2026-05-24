@@ -322,7 +322,7 @@
             </label>
             <label>
                 TURN
-                <input id="turnUrl" value="turn:10.68.0.133:3478" spellcheck="false">
+                <input id="turnUrl" value="" spellcheck="false">
             </label>
             <label>
                 User
@@ -393,9 +393,14 @@
 
         const params = new URLSearchParams(window.location.search);
         serverUrlEl.value = hostServerUrl();
+        turnUrlEl.value = hostTurnUrls();
 
         if (params.has('server')) {
             serverUrlEl.value = params.get('server');
+        }
+
+        if (params.has('turn')) {
+            turnUrlEl.value = params.get('turn');
         }
 
         function setStatus(element, text, tone) {
@@ -422,6 +427,15 @@
             return `${protocol}//${targetHost}:8088`;
         }
 
+        function hostTurnUrls() {
+            const host = window.location.hostname;
+            const targetHost = !host || host === '0.0.0.0' ? 'localhost' : host;
+            return [
+                `turn:${targetHost}:3478?transport=udp`,
+                `turn:${targetHost}:3478?transport=tcp`,
+            ].join(',');
+        }
+
         function describeFetchError(error, path) {
             const target = endpoint(path);
 
@@ -439,11 +453,14 @@
 
         function peerConfig() {
             const iceServers = [{ urls: ['stun:stun.l.google.com:19302'] }];
-            const turnUrl = turnUrlEl.value.trim();
+            const turnUrls = turnUrlEl.value
+                .split(',')
+                .map((value) => value.trim())
+                .filter(Boolean);
 
-            if (turnUrl) {
+            if (turnUrls.length) {
                 iceServers.push({
-                    urls: [turnUrl],
+                    urls: turnUrls,
                     username: turnUserEl.value,
                     credential: turnPasswordEl.value,
                 });

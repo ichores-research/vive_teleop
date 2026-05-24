@@ -67,7 +67,7 @@ source /opt/ros/humble/setup.bash
 source /ros2_ws/install/setup.bash
 
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI=file:///ros2_ws/cyclonedds.xml
+export CYCLONEDDS_URI="${CYCLONEDDS_URI:-file:///ros2_ws/cyclonedds.xml}"
 export ROS_DOMAIN_ID=0
 
 TOPIC="/xtion/rgb/image_raw"
