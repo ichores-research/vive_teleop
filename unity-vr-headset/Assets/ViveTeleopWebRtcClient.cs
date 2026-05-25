@@ -45,6 +45,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     bool inputChannelOpen;
     bool wristCalibrationReady;
     bool calibrateWristOnNextSample;
+    bool recenterHeadsetPoseOnNextSample;
     Quaternion wristCalibrationInverse = Quaternion.identity;
 
     IEnumerator Start()
@@ -81,6 +82,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         if (Input.GetKeyDown(recalibrateWristKey))
         {
             CalibrateWristRotation();
+            RecenterHeadsetPose();
         }
 
         LockDisplayToCamera();
@@ -115,6 +117,11 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     public void CalibrateWristRotation()
     {
         calibrateWristOnNextSample = true;
+    }
+
+    public void RecenterHeadsetPose()
+    {
+        recenterHeadsetPoseOnNextSample = true;
     }
 
     IEnumerator ConnectRoutine()
@@ -394,6 +401,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         {
             type = "unity_teleop_pose",
             timestamp = Time.realtimeSinceStartup,
+            headsetRecenter = recenterHeadsetPoseOnNextSample,
         };
 
         if (sendHmdPose && hmdSource != null)
@@ -455,6 +463,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         }
 
         inputChannel.Send(JsonUtility.ToJson(payload));
+        recenterHeadsetPoseOnNextSample = false;
     }
 
     void LockDisplayToCamera()
@@ -649,6 +658,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public float hmdRy;
         public float hmdRz;
         public float hmdRw;
+        public bool headsetRecenter;
         public bool wristAvailable;
         public string wristSource;
         public float wristPx;

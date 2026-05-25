@@ -11,6 +11,10 @@ from std_msgs.msg import String
 DEFAULT_INPUT_TOPIC = "/vive/input_mock"
 DEFAULT_ROBOT_WRIST_TOPIC = "/vive/robot_wrist_orientation"
 DEFAULT_HEADSET_POSE_TOPIC = "vive/headset_pose"
+TIAGO_HEAD_PAN_MIN = -1.24 * 0.9
+TIAGO_HEAD_PAN_MAX = 1.24 * 0.9
+TIAGO_HEAD_TILT_MIN = -0.98 * 0.9
+TIAGO_HEAD_TILT_MAX = 0.79 * 0.9
 
 
 class WebRtcInputPublisher(Node):
@@ -33,6 +37,7 @@ class WebRtcInputPublisher(Node):
             10,
         )
         self._topic = topic
+        self._headset_reference_inverse: dict[str, float] | None = None
 
     def publish_input(self, payload: str | bytes) -> None:
         message = String()
@@ -91,19 +96,28 @@ class WebRtcInputPublisher(Node):
         if quaternion is None:
             return
 
-        x = quaternion["x"]
-        y = quaternion["y"]
-        z = quaternion["z"]
-        w = quaternion["w"]
-        pan = math.atan2(
-            2 * (w * y + x * z),
-            1 - 2 * (y * y + x * x),
+        if self._headset_reference_inverse is None or data.get("headsetRecenter"):
+            self._headset_reference_inverse = self._invert_quaternion(quaternion)
+            self.get_logger().info("Recentered headset pose reference")
+
+        relative_quaternion = self._multiply_quaternions(
+            self._headset_reference_inverse,
+            quaternion,
         )
-        tilt_value = max(-1.0, min(1.0, 2 * (w * x - z * y)))
-        tilt = math.asin(tilt_value)
+        raw_pan, raw_tilt = self._quaternion_to_pan_tilt(relative_quaternion)
+        pan = self._clamp(raw_pan, TIAGO_HEAD_PAN_MIN, TIAGO_HEAD_PAN_MAX)
+        tilt = self._clamp(raw_tilt, TIAGO_HEAD_TILT_MIN, TIAGO_HEAD_TILT_MAX)
+        limited = pan != raw_pan or tilt != raw_tilt
 
         message = String()
-        message.data = json.dumps({"pan": pan, "tilt": tilt})
+        message.data = json.dumps(
+            {
+                "pan": pan,
+                "tilt": tilt,
+                "frame": "calibrated_relative",
+                "limited": limited,
+            }
+        )
         self._headset_pose_publisher.publish(message)
 
     def _extract_robot_wrist_quaternion(
@@ -138,6 +152,63 @@ class WebRtcInputPublisher(Node):
             quaternion[axis] /= norm
 
         return quaternion
+
+    @staticmethod
+    def _invert_quaternion(
+        quaternion: dict[str, float],
+    ) -> dict[str, float]:
+        return {
+            "x": -quaternion["x"],
+            "y": -quaternion["y"],
+            "z": -quaternion["z"],
+            "w": quaternion["w"],
+        }
+
+    @staticmethod
+    def _multiply_quaternions(
+        first: dict[str, float],
+        second: dict[str, float],
+    ) -> dict[str, float]:
+        x1 = first["x"]
+        y1 = first["y"]
+        z1 = first["z"]
+        w1 = first["w"]
+        x2 = second["x"]
+        y2 = second["y"]
+        z2 = second["z"]
+        w2 = second["w"]
+
+        return {
+            "x": w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            "y": w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            "z": w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            "w": w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        }
+
+    @staticmethod
+    def _quaternion_to_pan_tilt(
+        quaternion: dict[str, float],
+    ) -> tuple[float, float]:
+        x = quaternion["x"]
+        y = quaternion["y"]
+        z = quaternion["z"]
+        w = quaternion["w"]
+        pan = math.atan2(
+            2 * (w * y + x * z),
+            1 - 2 * (y * y + x * x),
+        )
+        tilt_value = WebRtcInputPublisher._clamp(
+            2 * (w * x - z * y),
+            -1.0,
+            1.0,
+        )
+        tilt = math.asin(tilt_value)
+
+        return pan, tilt
+
+    @staticmethod
+    def _clamp(value: float, minimum: float, maximum: float) -> float:
+        return max(minimum, min(maximum, value))
 
     def _extract_headset_quaternion(
         self,
