@@ -9,8 +9,8 @@ using UnityEngine.XR;
 public class ViveTeleopWebRtcClient : MonoBehaviour
 {
     [Header("Server")]
-    public string configUrl = "http://192.168.1.96:8088/config";
-    public string fallbackServerUrl = "http://192.168.1.96:8088";
+    public string configUrl = "http://192.168.1.174:8088/config";
+    public string fallbackServerUrl = "http://192.168.1.174:8088";
     public bool connectOnStart = true;
     public float iceGatheringTimeoutSeconds = 10f;
 

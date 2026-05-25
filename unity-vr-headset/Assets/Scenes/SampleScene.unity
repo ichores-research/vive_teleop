@@ -669,8 +669,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4a2d2f7d38ad4ed4a8f1fc0a9af93412, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  configUrl: http://192.168.1.96:8088/config
-  fallbackServerUrl: http://192.168.1.96:8088
+  configUrl: http://192.168.1.174:8088/config
+  fallbackServerUrl: http://192.168.1.174:8088
   connectOnStart: 1
   iceGatheringTimeoutSeconds: 10
   connectVideo: 1
@@ -706,8 +706,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4a2d2f7d38ad4ed4a8f1fc0a9af93412, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  configUrl: http://192.168.1.96:8088/config
-  fallbackServerUrl: http://192.168.1.96:8088
+  configUrl: http://192.168.1.174:8088/config
+  fallbackServerUrl: http://192.168.1.174:8088
   connectOnStart: 1
   iceGatheringTimeoutSeconds: 10
   connectVideo: 1
