@@ -70,6 +70,29 @@ services:
     networks:
       web_net: {}
 
+  moveit_server_wifi:
+    build:
+      context: ./moveit_server
+      network: host
+    container_name: moveit_server_wifi
+    depends_on:
+      - ros1_bridge_wifi
+      - ros2_app_wifi
+    network_mode: host
+    volumes:
+      - ${CYCLONEDDS_HOST_CONFIG:?Run scripts/up-wifi-webrtc.sh or set CYCLONEDDS_HOST_CONFIG}:/tmp/cyclonedds.xml:ro
+    working_dir: /moveit_ws
+    restart: on-failure
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+      - PYTHONUNBUFFERED=1
+    command: >
+      bash -c "
+        ros2 launch vive_moveit_server vive_moveit_server.launch.py ${MOVEIT_SERVER_LAUNCH_ARGS:-}
+      "
+
   coturn_wifi:
     image: coturn/coturn:latest
     container_name: coturn_wifi

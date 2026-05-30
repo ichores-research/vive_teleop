@@ -1,0 +1,30 @@
+vive_moveit_server:
+  ros__parameters:
+    # TIAGo single MoveIt configs commonly expose either "arm_torso" or "arm".
+    arm_group: arm_torso
+    end_effector_link: ""
+
+    head_input_topic: /vive/head_pose
+    head_output_topic: /vive/robot_head_pose
+    hand_target_topic: /vive/hand_target_pose
+
+    # "moveit" executes through MoveIt controllers. "trajectory_topic" publishes
+    # the planned JointTrajectory for a bridgeable ROS controller topic.
+    # "plan_only" validates planning without commanding the robot.
+    execution_mode: moveit
+    arm_command_topic: /arm_controller/command
+    async_execution: true
+
+    # The server treats incoming hand target coordinates as this robot frame.
+    # Adjust calibration/offsets below if your Unity frame is not already aligned.
+    pose_reference_frame: base_footprint
+
+    planning_time_sec: 0.35
+    max_velocity_scaling_factor: 0.25
+    max_acceleration_scaling_factor: 0.25
+    min_plan_interval_sec: 0.25
+    position_deadband_m: 0.01
+    orientation_deadband_rad: 0.035
+
+    hand_position_scale: [1.0, 1.0, 1.0]
+    hand_position_offset: [0.0, 0.0, 0.0]

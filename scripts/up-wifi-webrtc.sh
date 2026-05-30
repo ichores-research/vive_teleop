@@ -53,7 +53,7 @@ printf 'Server TURN URLs: %s\n' "$WEBRTC_TURN_URLS"
 
 cd "$repo_dir"
 docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
-  ros1_bridge ros2_app coturn >/dev/null 2>&1 || true
+  ros1_bridge ros2_app moveit_server coturn >/dev/null 2>&1 || true
 
 exec docker compose -f docker-compose.yml -f docker-compose.wifi.yml up --build "$@" \
-  ros1_bridge_wifi ros2_app_wifi coturn_wifi
+  ros1_bridge_wifi ros2_app_wifi moveit_server_wifi coturn_wifi

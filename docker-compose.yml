@@ -58,6 +58,39 @@ services:
         ros2 run image_listener image_subscriber
       "
 
+  moveit_server:
+    build:
+      context: ./moveit_server
+      network: host
+
+    container_name: moveit_server
+
+    depends_on:
+      - ros1_bridge
+      - ros2_app
+
+    volumes:
+      - ./ros2_app/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
+
+    working_dir: /moveit_ws
+
+    restart: on-failure
+
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///moveit_ws/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+      - PYTHONUNBUFFERED=1
+
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.134
+
+    command: >
+      bash -c "
+        ros2 launch vive_moveit_server vive_moveit_server.launch.py ${MOVEIT_SERVER_LAUNCH_ARGS:-}
+      "
+
   coturn:
     image: coturn/coturn:latest
     container_name: coturn

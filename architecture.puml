@@ -23,7 +23,15 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "WebRTCServer\naiohttp + aiortc" as WebRTCServer
     component "InputPublisher\nROS2 node" as InputPublisher
     queue "ROS2 topic\n/vive/input_mock" as InputTopic
+    queue "ROS2 topic\n/vive/head_pose" as HeadPoseTopic
+    queue "ROS2 topic\n/vive/hand_target_pose" as HandTargetTopic
     queue "ROS2 topic\n/vive/robot_wrist_orientation" as WristTopic
+  }
+
+  node "moveit_server container\n10.68.0.134" as MoveItContainer {
+    component "vive_moveit_server\nROS2 Humble + MoveIt" as MoveItServer
+    queue "ROS2 topic\n/vive/robot_head_pose" as RobotHeadTopic
+    queue "ROS2 topic\n/arm_controller/command\noptional trajectory mode" as ArmCommandTopic
   }
 
   node "coturn container\n10.68.0.133:3478" as Coturn {
@@ -41,7 +49,13 @@ ImageSubscriber --> VideoTrack : latest BGR frame
 VideoTrack --> WebRTCServer : media track
 WebRTCServer --> InputPublisher : data-channel messages
 InputPublisher --> InputTopic : std_msgs/String
+InputPublisher --> HeadPoseTopic : geometry_msgs/PoseStamped
+InputPublisher --> HandTargetTopic : geometry_msgs/PoseStamped
 InputPublisher --> WristTopic : geometry_msgs/QuaternionStamped
+HeadPoseTopic --> MoveItServer : pass-through head pose
+HandTargetTopic --> MoveItServer : MoveIt pose target
+MoveItServer --> RobotHeadTopic : solved head command as-is
+MoveItServer --> ArmCommandTopic : trajectory_msgs/JointTrajectory\nwhen execution_mode=trajectory_topic
 
 StaticServer --> Browser : serves index.html
 Browser --> WebRTCServer : HTTP POST /offer\nSDP offer/answer
