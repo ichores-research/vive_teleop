@@ -1,6 +1,6 @@
 # vive_teleop
 
-`vive_teleop` bridges a robot ROS1 camera topic into ROS2, serves it over WebRTC, and accepts WebRTC input data that can later become teleoperation commands.
+`vive_teleop` bridges robot ROS1 topics into ROS2, serves the camera over WebRTC, accepts WebRTC input, and turns wrist pose targets into TIAGo arm controller commands through MoveIt IK.
 
 The Unity VR client is still the intended headset frontend, but `index.html` can be used as a lightweight browser debug client without launching Unity or SteamVR.
 
@@ -10,7 +10,7 @@ The current system has five main pieces:
 
 - `ros1_bridge`: ROS1 Noetic to ROS2 Foxy dynamic bridge. It connects to the robot ROS master and exposes ROS1 topics into ROS2.
 - `ros2_app`: ROS2 Humble application. It waits for `/xtion/rgb/image_raw`, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
-- `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, forwards solved head pose commands, and sends TIAGo arm goals to MoveIt.
+- `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, forwards solved head pose commands, and uses seeded MoveIt IK for small joystick-style wrist updates.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
 
@@ -22,7 +22,7 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/input_publisher.py`: ROS2 publisher for raw WebRTC input messages on `/vive/input_mock`, typed pose topics on `/vive/head_pose`, `/vive/wrist_pose`, `/vive/hand_target_pose`, and calibrated wrist orientation commands on `/vive/robot_wrist_orientation`.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
-See [architecture.puml](architecture.puml) for the PlantUML source. Existing rendered reference: [architecture.png](architecture.png).
+See [architecture.puml](architecture.puml) for the PlantUML source. Regenerate [architecture.png](architecture.png) from it when a rendered diagram is needed.
 
 ## Network Layout
 
@@ -59,7 +59,9 @@ Accepts a WebRTC offer for an input data channel and returns an answer. Messages
 
 String payloads are published as-is. Binary payloads are encoded as JSON with base64 data.
 
-When a Unity payload includes pose fields, `ros2_app` also publishes standard ROS2 messages:
+The browser debug client snapshots the displayed input values when the input data channel opens, then streams a `unity_teleop_pose` payload at 10 Hz. Use the number-input arrows to make small changes while the stream continues.
+
+When a payload includes pose fields, `ros2_app` also publishes standard ROS2 messages:
 
 - `/vive/head_pose`: `geometry_msgs/PoseStamped` copied from the HMD pose.
 - `/vive/wrist_pose`: `geometry_msgs/PoseStamped` copied from the joystick/controller wrist pose.
@@ -72,27 +74,34 @@ ros2 topic echo /vive/robot_wrist_orientation
 
 ## MoveIt server
 
-The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app`, so it receives the WebRTC topics directly on the ROS2 side of the bridge. It is implemented in Python and talks to MoveIt through `moveit_msgs/action/MoveGroup` on `/move_action`. By default the container installs and starts Humble's `tiago_moveit_config` `move_group.launch.py` before the teleop node.
+The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app`, so it receives the WebRTC topics directly on the ROS2 side of the bridge. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, starts `robot_state_publisher`, and then starts the teleop node.
 
 Default behavior:
 
 - Subscribes to `/vive/head_pose` and republishes the message unchanged to `/look_cmd_vel_ps`, with a debug copy on `/vive/robot_head_pose`. Point `head_output_topic` at the correct robot-side solved-head command topic if your robot uses another bridged `PoseStamped` topic.
-- Subscribes to `/vive/hand_target_pose` and sends pose constraints to MoveIt group `arm_torso`.
-- Uses the target orientation from the calibrated 6-DoF joystick wrist quaternion. The rest of the arm is solved by the MoveIt kinematics plugin configured for the TIAGo group. The image overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik`, the ROS2 MoveIt IK solver that reimplements the main `bio_ik` behavior.
-- `execution_mode: trajectory_topic` asks MoveIt to plan, then publishes the planned arm trajectory to `/arm_controller/command` and torso trajectory to `/torso_controller/command`, both of which are bridgeable to ROS1. Set `execution_mode: moveit` only when ROS2 controller actions are available to MoveIt, or `plan_only` while testing.
-- Waits for the MoveIt action server before sending arm goals, so missing TIAGo MoveIt config no longer crashes the teleop node.
+- Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
+- Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for every 10 Hz input update.
+- Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
+- Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
+- Publishes short `trajectory_msgs/JointTrajectory` commands to `/arm_controller/command`, which the ROS1 bridge can forward to the robot controller.
+- Overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik` in local, one-attempt mode for small repeated joystick moves.
+- Ramps IK output after startup or a pause with `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec` so the first stationary target does not jerk at the full joint-delta limit.
+- If exact 6-DoF IK returns `NO_IK_SOLUTION` (`-31`) and a previous reachable wrist orientation exists, it retries the same position with that last reachable orientation.
 
 Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_params.yaml`. For a real robot, check at least:
 
-- `arm_group`: `arm_torso` or `arm`, matching your TIAGo MoveIt config.
-- `end_effector_link`: the TIAGo wrist/tool link used in MoveIt constraints. The default is `arm_tool_link`.
+- `arm_group`: currently `arm` to force no torso. `arm_torso` allows torso motion if you deliberately want it.
+- `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
-- `move_group_action_name`: defaults to `/move_action`; adjust if your MoveIt launch exposes the MoveGroup action elsewhere.
-- `arm_command_topic` and `torso_command_topic`: trajectory topics bridged to the ROS1 robot controllers.
-- `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before planning.
+- `ik_service_name`: defaults to `/compute_ik`.
+- `joint_state_topic`: defaults to `/joint_states`.
+- `arm_command_topic`: trajectory topic bridged to the ROS1 arm controller.
+- `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before IK.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
+- `max_joint_delta_rad`, `joint_smoothing_alpha`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output.
+- `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec`: startup/resume ramp tuning.
 
-The node stays alive if MoveIt is not ready yet, forwards head poses immediately, and waits for the MoveIt action server before arm planning.
+`NO_IK_SOLUTION` (`-31`) does not necessarily mean the `xyz` point is visually impossible. In `ik_topic` mode MoveIt is solving the full `end_effector_link` pose for the arm-only group, including orientation, joint limits, current seed state, and the fact that torso is intentionally locked out.
 
 To disable the bundled TIAGo MoveIt launch and wait for an external MoveGroup server instead:
 
@@ -101,7 +110,7 @@ MOVEIT_SERVER_LAUNCH_ARGS="moveit_launch_enabled:=false" \
   sudo docker compose up --build moveit_server
 ```
 
-To pass robot variant arguments through to TIAGo MoveIt, set `moveit_arm`, `moveit_arm_type`, `moveit_base_type`, `moveit_end_effector`, and/or `moveit_ft_sensor` in `MOVEIT_SERVER_LAUNCH_ARGS`. `moveit_allow_trajectory_execution` defaults to `False`; the teleop node commands the real ROS1 robot by publishing planned trajectories to the bridged controller topics instead.
+To pass robot variant arguments through to TIAGo MoveIt, set `moveit_arm`, `moveit_arm_type`, `moveit_base_type`, `moveit_end_effector`, and/or `moveit_ft_sensor` in `MOVEIT_SERVER_LAUNCH_ARGS`. `moveit_allow_trajectory_execution` defaults to `False`; the teleop node commands the real ROS1 robot by publishing short IK-generated trajectories to the bridged controller topics instead.
 
 ## Running
 
@@ -182,7 +191,7 @@ For browser debugging:
 3. If the debug page is served by this host, try `Host :8088` first.
 4. If the debug page is served from another PC, set `Server` to `http://<host-ip>:8088` manually.
 5. Click `Start Video` to connect to `/offer`.
-6. Click `Input` to connect to `/input_offer`, then send a payload.
+6. Click `Input` to connect to `/input_offer`; the page streams the current input state at 10 Hz. Use the number-input arrows to adjust pose values.
 
 For Unity:
 

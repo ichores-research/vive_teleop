@@ -526,10 +526,13 @@
             joystickAxisX: document.getElementById('joystickAxisX'),
             joystickAxisY: document.getElementById('joystickAxisY'),
         };
+        const INPUT_STREAM_INTERVAL_MS = 100;
 
         let videoPc = null;
         let inputPc = null;
         let inputChannel = null;
+        let inputStreamTimer = null;
+        let inputStreamState = null;
 
         const params = new URLSearchParams(window.location.search);
         const serverParamProvided = params.has('server');
@@ -664,6 +667,40 @@
             sendStopBtn.disabled = !inputOpen;
         }
 
+        function captureInputState() {
+            const state = {};
+            for (const [id, element] of Object.entries(inputControls)) {
+                if (element.type === 'number') {
+                    state[id] = numberValue(id);
+                } else {
+                    state[id] = element.value;
+                }
+            }
+            return state;
+        }
+
+        function renderInputState(state) {
+            for (const [id, value] of Object.entries(state)) {
+                const element = inputControls[id];
+                if (!element) {
+                    continue;
+                }
+                element.value = value;
+            }
+        }
+
+        function setupInputStateSync() {
+            for (const [id, element] of Object.entries(inputControls)) {
+                element.addEventListener('input', () => {
+                    if (!inputStreamState) {
+                        return;
+                    }
+                    inputStreamState[id] =
+                        element.type === 'number' ? numberValue(id) : element.value;
+                });
+            }
+        }
+
         function waitForIceGathering(pc) {
             return new Promise((resolve) => {
                 if (pc.iceGatheringState === 'complete') {
@@ -773,12 +810,14 @@
             inputChannel.addEventListener('open', () => {
                 setStatus(inputStatusEl, 'Input: open', 'ok');
                 log('Input data channel open');
+                startInputStream();
                 updateButtons();
             });
 
             inputChannel.addEventListener('close', () => {
                 setStatus(inputStatusEl, 'Input: closed');
                 log('Input data channel closed');
+                stopInputStream();
                 updateButtons();
             });
 
@@ -801,18 +840,30 @@
             }
         }
 
-        function sendInput(payload) {
+        function sendInput(payload, options = {}) {
             if (!inputChannel || inputChannel.readyState !== 'open') {
-                log('Input data channel is not open');
-                return;
+                if (!options.quiet) {
+                    log('Input data channel is not open');
+                }
+                return false;
             }
 
             inputChannel.send(payload);
-            log(`Sent input: ${payload}`);
+            if (!options.quiet) {
+                log(`Sent input: ${payload}`);
+            }
+            return true;
         }
 
-        function numberValue(id) {
-            const value = Number(inputControls[id].value);
+        function controlValue(id, state) {
+            if (state && Object.prototype.hasOwnProperty.call(state, id)) {
+                return state[id];
+            }
+            return inputControls[id].value;
+        }
+
+        function numberValue(id, state = null) {
+            const value = Number(controlValue(id, state));
             return Number.isFinite(value) ? value : 0;
         }
 
@@ -820,47 +871,77 @@
             return Date.now() / 1000;
         }
 
-        function headFields() {
+        function headFields(state = null) {
             return {
                 hmdAvailable: true,
-                hmdFrame: inputControls.headFrame.value || 'unity_world',
-                hmdPx: numberValue('headPx'),
-                hmdPy: numberValue('headPy'),
-                hmdPz: numberValue('headPz'),
-                hmdRx: numberValue('headRx'),
-                hmdRy: numberValue('headRy'),
-                hmdRz: numberValue('headRz'),
-                hmdRw: numberValue('headRw'),
+                hmdFrame: controlValue('headFrame', state) || 'unity_world',
+                hmdPx: numberValue('headPx', state),
+                hmdPy: numberValue('headPy', state),
+                hmdPz: numberValue('headPz', state),
+                hmdRx: numberValue('headRx', state),
+                hmdRy: numberValue('headRy', state),
+                hmdRz: numberValue('headRz', state),
+                hmdRw: numberValue('headRw', state),
             };
         }
 
-        function wristFields() {
+        function wristFields(state = null) {
             return {
                 wristAvailable: true,
                 wristSource: 'debug_page',
-                wristFrame: inputControls.wristFrame.value || 'unity_world',
-                wristPx: numberValue('wristPx'),
-                wristPy: numberValue('wristPy'),
-                wristPz: numberValue('wristPz'),
-                wristRx: numberValue('wristRx'),
-                wristRy: numberValue('wristRy'),
-                wristRz: numberValue('wristRz'),
-                wristRw: numberValue('wristRw'),
-                robotWristFrame: inputControls.robotWristFrame.value || 'base_footprint',
-                robotWristRx: numberValue('robotWristRx'),
-                robotWristRy: numberValue('robotWristRy'),
-                robotWristRz: numberValue('robotWristRz'),
-                robotWristRw: numberValue('robotWristRw'),
-                joystickAxisX: numberValue('joystickAxisX'),
-                joystickAxisY: numberValue('joystickAxisY'),
+                wristFrame: controlValue('wristFrame', state) || 'unity_world',
+                wristPx: numberValue('wristPx', state),
+                wristPy: numberValue('wristPy', state),
+                wristPz: numberValue('wristPz', state),
+                wristRx: numberValue('wristRx', state),
+                wristRy: numberValue('wristRy', state),
+                wristRz: numberValue('wristRz', state),
+                wristRw: numberValue('wristRw', state),
+                robotWristFrame: controlValue('robotWristFrame', state) || 'base_footprint',
+                robotWristRx: numberValue('robotWristRx', state),
+                robotWristRy: numberValue('robotWristRy', state),
+                robotWristRz: numberValue('robotWristRz', state),
+                robotWristRw: numberValue('robotWristRw', state),
+                joystickAxisX: numberValue('joystickAxisX', state),
+                joystickAxisY: numberValue('joystickAxisY', state),
                 joystickTrigger: 0,
                 joystickGrip: 0,
                 joystickPrimaryButton: false,
             };
         }
 
-        function sendPayloadObject(payload) {
-            sendInput(JSON.stringify(payload));
+        function buildCombinedPayload(state = null) {
+            return {
+                type: 'unity_teleop_pose',
+                timestamp: timestampSeconds(),
+                ...headFields(state),
+                ...wristFields(state),
+            };
+        }
+
+        function startInputStream() {
+            stopInputStream();
+            inputStreamState = captureInputState();
+            renderInputState(inputStreamState);
+
+            const sendCurrentState = () => {
+                sendPayloadObject(buildCombinedPayload(inputStreamState), { quiet: true });
+            };
+
+            sendCurrentState();
+            inputStreamTimer = window.setInterval(sendCurrentState, INPUT_STREAM_INTERVAL_MS);
+            log('Input stream started at 10 Hz');
+        }
+
+        function stopInputStream() {
+            if (inputStreamTimer) {
+                window.clearInterval(inputStreamTimer);
+                inputStreamTimer = null;
+            }
+        }
+
+        function sendPayloadObject(payload, options = {}) {
+            sendInput(JSON.stringify(payload), options);
         }
 
         function sendDebugPayload() {
@@ -886,12 +967,7 @@
         }
 
         function sendCombinedPayload() {
-            sendPayloadObject({
-                type: 'unity_teleop_pose',
-                timestamp: timestampSeconds(),
-                ...headFields(),
-                ...wristFields(),
-            });
+            sendPayloadObject(buildCombinedPayload(inputStreamState || captureInputState()));
         }
 
         async function closeVideo() {
@@ -904,6 +980,7 @@
         }
 
         async function closeInput() {
+            stopInputStream();
             if (inputChannel) {
                 inputChannel.close();
             }
@@ -945,6 +1022,7 @@
         });
         window.addEventListener('beforeunload', disconnectAll);
 
+        setupInputStateSync();
         updateButtons();
         log(`Ready for ${serverUrlEl.value}`);
     </script>

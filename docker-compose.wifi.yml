@@ -18,7 +18,7 @@ services:
         unset ROS_DISTRO
         source /opt/ros/foxy/setup.bash
         source /bridge_ws/install/setup.bash
-        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
+        exec /usr/local/bin/filter_ros1_bridge_logs.py ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
     environment:
       - ROS_MASTER_URI=http://${ROBOT_IP:-10.68.0.1}:11311
       - ROS_IP=${ROS_FIELD_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set ROS_FIELD_HOST_IP}

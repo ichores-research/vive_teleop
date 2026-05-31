@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -20,6 +21,8 @@ from moveit_msgs.msg import (
     PositionConstraint,
     RobotState,
 )
+from moveit_msgs.srv import GetPositionIK
+from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -100,6 +103,20 @@ def _orientation_distance(left: PoseStamped, right: PoseStamped) -> float:
     return 2.0 * math.acos(dot)
 
 
+def _copy_pose_stamped(message: PoseStamped) -> PoseStamped:
+    copy = PoseStamped()
+    copy.header.stamp = message.header.stamp
+    copy.header.frame_id = message.header.frame_id
+    copy.pose.position.x = message.pose.position.x
+    copy.pose.position.y = message.pose.position.y
+    copy.pose.position.z = message.pose.position.z
+    copy.pose.orientation.x = message.pose.orientation.x
+    copy.pose.orientation.y = message.pose.orientation.y
+    copy.pose.orientation.z = message.pose.orientation.z
+    copy.pose.orientation.w = message.pose.orientation.w
+    return copy
+
+
 class ViveMoveItServer(Node):
     def __init__(self) -> None:
         super().__init__("vive_moveit_server")
@@ -135,9 +152,17 @@ class ViveMoveItServer(Node):
             "torso_command_topic",
             "/torso_controller/command",
         ).value
+        joint_state_topic = self.declare_parameter(
+            "joint_state_topic",
+            "/joint_states",
+        ).value
         self.move_group_action_name = self.declare_parameter(
             "move_group_action_name",
             "/move_action",
+        ).value
+        self.ik_service_name = self.declare_parameter(
+            "ik_service_name",
+            "/compute_ik",
         ).value
 
         self.execution_mode = self.declare_parameter("execution_mode", "moveit").value
@@ -187,6 +212,36 @@ class ViveMoveItServer(Node):
         self.max_hand_target_z_m = float(
             self.declare_parameter("max_hand_target_z_m", 1.6).value
         )
+        self.ik_timeout_sec = float(
+            self.declare_parameter("ik_timeout_sec", 0.03).value
+        )
+        self.ik_avoid_collisions = bool(
+            self.declare_parameter("ik_avoid_collisions", False).value
+        )
+        self.command_duration_sec = float(
+            self.declare_parameter("command_duration_sec", 0.12).value
+        )
+        self.max_joint_delta_rad = float(
+            self.declare_parameter("max_joint_delta_rad", 0.08).value
+        )
+        self.joint_smoothing_alpha = float(
+            self.declare_parameter("joint_smoothing_alpha", 0.6).value
+        )
+        self.ik_warmup_sec = float(
+            self.declare_parameter("ik_warmup_sec", 1.5).value
+        )
+        self.ik_warmup_min_scale = float(
+            self.declare_parameter("ik_warmup_min_scale", 0.15).value
+        )
+        self.ik_warmup_reset_after_sec = float(
+            self.declare_parameter("ik_warmup_reset_after_sec", 0.5).value
+        )
+        self.ik_retry_last_orientation_on_no_solution = bool(
+            self.declare_parameter(
+                "ik_retry_last_orientation_on_no_solution",
+                True,
+            ).value
+        )
 
         self.hand_position_scale = _vector_parameter(
             self.declare_parameter(
@@ -235,11 +290,18 @@ class ViveMoveItServer(Node):
 
         self.pending_hand_target: Optional[PoseStamped] = None
         self.last_commanded_target: Optional[PoseStamped] = None
+        self.last_successful_ik_target: Optional[PoseStamped] = None
+        self.current_joint_positions: Dict[str, float] = {}
+        self.last_commanded_joint_positions: Dict[str, float] = {}
         self.last_plan_started_sec = 0.0
+        self.last_ik_request_sec = 0.0
+        self.ik_warmup_started_sec = 0.0
+        self.current_ik_motion_scale = 1.0
         self.last_log_times: Dict[str, float] = {}
         self.goal_in_flight = False
         self.received_head_pose = False
         self.received_hand_target = False
+        self.received_joint_state = False
 
         self.head_output_topics = []
         for topic in [head_output_topic, *head_extra_output_topics]:
@@ -266,6 +328,7 @@ class ViveMoveItServer(Node):
             MoveGroup,
             self.move_group_action_name,
         )
+        self.ik_client = self.create_client(GetPositionIK, self.ik_service_name)
 
         self.create_subscription(
             PoseStamped,
@@ -277,6 +340,12 @@ class ViveMoveItServer(Node):
             PoseStamped,
             hand_target_topic,
             self._on_hand_target,
+            10,
+        )
+        self.create_subscription(
+            JointState,
+            joint_state_topic,
+            self._on_joint_state,
             10,
         )
         self.create_timer(0.02, self._maybe_send_latest_target)
@@ -302,6 +371,11 @@ class ViveMoveItServer(Node):
                     else ""
                 )
             )
+        elif self.execution_mode == "ik_topic":
+            self.get_logger().info(
+                f"IK service '{self.ik_service_name}' seeds from '{joint_state_topic}' "
+                f"and publishes short trajectories to '{arm_command_topic}'"
+            )
 
     def _on_head_pose(self, message: PoseStamped) -> None:
         if not self.received_head_pose:
@@ -325,22 +399,20 @@ class ViveMoveItServer(Node):
             self.received_hand_target = True
         self.pending_hand_target = message
 
+    def _on_joint_state(self, message: JointState) -> None:
+        if not self.received_joint_state:
+            self.get_logger().info("Received first joint state sample")
+            self.received_joint_state = True
+
+        for name, position in zip(message.name, message.position):
+            self.current_joint_positions[name] = float(position)
+
     def _maybe_send_latest_target(self) -> None:
         if self.goal_in_flight or self.pending_hand_target is None:
             return
 
         now_sec = self.get_clock().now().nanoseconds / 1e9
         if now_sec - self.last_plan_started_sec < self.min_plan_interval_sec:
-            return
-
-        if not self.move_group_action.wait_for_server(
-            timeout_sec=self.wait_for_move_group_timeout_sec
-        ):
-            self._warn_throttled(
-                "move_group_wait",
-                f"Waiting for MoveIt action server '{self.move_group_action_name}'",
-                5.0,
-            )
             return
 
         target = self._apply_hand_target_adjustments(self.pending_hand_target)
@@ -364,6 +436,20 @@ class ViveMoveItServer(Node):
             self.pending_hand_target = None
             return
 
+        if self.execution_mode == "ik_topic":
+            self._send_ik_target(target, now_sec)
+            return
+
+        if not self.move_group_action.wait_for_server(
+            timeout_sec=self.wait_for_move_group_timeout_sec
+        ):
+            self._warn_throttled(
+                "move_group_wait",
+                f"Waiting for MoveIt action server '{self.move_group_action_name}'",
+                5.0,
+            )
+            return
+
         goal = self._build_move_group_goal(target)
         self.goal_in_flight = True
         self.last_plan_started_sec = now_sec
@@ -378,6 +464,98 @@ class ViveMoveItServer(Node):
         send_future.add_done_callback(
             lambda future: self._on_goal_response(future, target)
         )
+
+    def _send_ik_target(self, target: PoseStamped, now_sec: float) -> None:
+        active_joint_names = self._active_output_joint_names()
+        missing_joints = [
+            joint_name
+            for joint_name in active_joint_names
+            if joint_name not in self.current_joint_positions
+        ]
+        if missing_joints:
+            self._warn_throttled(
+                "joint_state_wait",
+                "Waiting for joint states before IK servo command; missing "
+                + ", ".join(missing_joints),
+                2.0,
+            )
+            return
+
+        if not self.ik_client.wait_for_service(
+            timeout_sec=self.wait_for_move_group_timeout_sec
+        ):
+            self._warn_throttled(
+                "ik_service_wait",
+                f"Waiting for MoveIt IK service '{self.ik_service_name}'",
+                5.0,
+            )
+            return
+
+        self.current_ik_motion_scale = self._update_ik_warmup(now_sec)
+
+        request = self._build_ik_request(target)
+        self.goal_in_flight = True
+        self.last_plan_started_sec = now_sec
+        self.pending_hand_target = None
+        future = self.ik_client.call_async(request)
+        future.add_done_callback(
+            lambda result: self._on_ik_result(result, target, retry_count=0)
+        )
+
+    def _build_ik_request(self, target: PoseStamped) -> GetPositionIK.Request:
+        request = GetPositionIK.Request()
+        request.ik_request.group_name = self.arm_group
+        request.ik_request.robot_state = self._build_current_robot_state()
+        request.ik_request.avoid_collisions = self.ik_avoid_collisions
+        request.ik_request.ik_link_name = self.end_effector_link
+        request.ik_request.pose_stamped = target
+        request.ik_request.timeout = Duration(seconds=self.ik_timeout_sec).to_msg()
+        return request
+
+    def _update_ik_warmup(self, now_sec: float) -> float:
+        if self.ik_warmup_sec <= 0.0:
+            self.last_ik_request_sec = now_sec
+            return 1.0
+
+        if (
+            self.last_ik_request_sec <= 0.0
+            or now_sec - self.last_ik_request_sec > self.ik_warmup_reset_after_sec
+        ):
+            self.ik_warmup_started_sec = now_sec
+
+        self.last_ik_request_sec = now_sec
+        elapsed_sec = max(0.0, now_sec - self.ik_warmup_started_sec)
+        progress = max(0.0, min(1.0, elapsed_sec / self.ik_warmup_sec))
+        min_scale = max(0.0, min(1.0, self.ik_warmup_min_scale))
+        scale = min_scale + ((1.0 - min_scale) * progress)
+
+        if progress < 1.0:
+            self._info_throttled(
+                "ik_warmup",
+                f"IK motion warmup scale={scale:.2f}",
+                0.5,
+            )
+
+        return scale
+
+    def _build_current_robot_state(self) -> RobotState:
+        robot_state = RobotState()
+        robot_state.joint_state.name = [
+            name
+            for name in self._active_output_joint_names()
+            if name in self.current_joint_positions
+        ]
+        robot_state.joint_state.position = [
+            self.current_joint_positions[name]
+            for name in robot_state.joint_state.name
+        ]
+        robot_state.is_diff = True
+        return robot_state
+
+    def _active_output_joint_names(self) -> list[str]:
+        if "torso" in str(self.arm_group):
+            return [*self.torso_joint_names, *self.arm_joint_names]
+        return list(self.arm_joint_names)
 
     def _apply_hand_target_adjustments(self, message: PoseStamped) -> PoseStamped:
         target = PoseStamped()
@@ -502,6 +680,183 @@ class ViveMoveItServer(Node):
         constraints.position_constraints = [position_constraint]
         constraints.orientation_constraints = [orientation_constraint]
         return constraints
+
+    def _on_ik_result(
+        self,
+        future: Future,
+        target: PoseStamped,
+        retry_count: int,
+    ) -> None:
+        try:
+            response = future.result()
+        except Exception as error:
+            self.get_logger().warn(f"MoveIt IK request failed: {error}")
+            self.goal_in_flight = False
+            return
+
+        error_code = response.error_code.val
+        if error_code != MoveItErrorCodes.SUCCESS:
+            if self._retry_ik_with_last_orientation(error_code, target, retry_count):
+                return
+
+            self._warn_throttled(
+                "ik_error",
+                "MoveIt IK could not satisfy hand target, "
+                f"error_code={error_code} ({self._moveit_error_name(error_code)}), "
+                f"frame='{target.header.frame_id}' "
+                f"xyz=({target.pose.position.x:.3f}, "
+                f"{target.pose.position.y:.3f}, "
+                f"{target.pose.position.z:.3f})",
+                1.0,
+            )
+            self.goal_in_flight = False
+            return
+
+        solution_positions = {
+            name: float(position)
+            for name, position in zip(
+                response.solution.joint_state.name,
+                response.solution.joint_state.position,
+            )
+        }
+        if self._publish_ik_joint_command(solution_positions):
+            self.last_successful_ik_target = _copy_pose_stamped(target)
+            self._info_throttled(
+                "ik_topic_success",
+                f"Published IK servo command for '{self.arm_group}'",
+                2.0,
+            )
+
+        self.goal_in_flight = False
+
+    def _retry_ik_with_last_orientation(
+        self,
+        error_code: int,
+        target: PoseStamped,
+        retry_count: int,
+    ) -> bool:
+        if error_code != MoveItErrorCodes.NO_IK_SOLUTION:
+            return False
+        if retry_count > 0:
+            return False
+        if not self.ik_retry_last_orientation_on_no_solution:
+            return False
+        if self.last_successful_ik_target is None:
+            return False
+
+        retry_target = _copy_pose_stamped(target)
+        retry_target.pose.orientation = self.last_successful_ik_target.pose.orientation
+        request = self._build_ik_request(retry_target)
+        future = self.ik_client.call_async(request)
+        future.add_done_callback(
+            lambda result: self._on_ik_result(
+                result,
+                retry_target,
+                retry_count=retry_count + 1,
+            )
+        )
+        self._info_throttled(
+            "ik_retry_last_orientation",
+            "Retrying IK target position with the last reachable wrist orientation",
+            1.0,
+        )
+        return True
+
+    @staticmethod
+    def _moveit_error_name(error_code: int) -> str:
+        if error_code == MoveItErrorCodes.NO_IK_SOLUTION:
+            return "NO_IK_SOLUTION"
+        if error_code == MoveItErrorCodes.TIMED_OUT:
+            return "TIMED_OUT"
+        if error_code == MoveItErrorCodes.FRAME_TRANSFORM_FAILURE:
+            return "FRAME_TRANSFORM_FAILURE"
+        if error_code == MoveItErrorCodes.INVALID_ROBOT_STATE:
+            return "INVALID_ROBOT_STATE"
+        if error_code == MoveItErrorCodes.GOAL_IN_COLLISION:
+            return "GOAL_IN_COLLISION"
+        if error_code == MoveItErrorCodes.PLANNING_FAILED:
+            return "PLANNING_FAILED"
+        return "UNKNOWN"
+
+    def _publish_ik_joint_command(self, solution_positions: Dict[str, float]) -> bool:
+        published = False
+        if self._publish_joint_position_command(
+            solution_positions,
+            self.arm_joint_names,
+            self.trajectory_publisher,
+        ):
+            published = True
+
+        if "torso" in str(self.arm_group) and self.torso_trajectory_publisher:
+            if self._publish_joint_position_command(
+                solution_positions,
+                self.torso_joint_names,
+                self.torso_trajectory_publisher,
+            ):
+                published = True
+
+        return published
+
+    def _publish_joint_position_command(
+        self,
+        solution_positions: Dict[str, float],
+        joint_names: list[str],
+        publisher,
+    ) -> bool:
+        selected_joint_names = [
+            joint_name for joint_name in joint_names if joint_name in solution_positions
+        ]
+        if not selected_joint_names:
+            return False
+
+        start_positions: Dict[str, float] = {}
+        missing_start_positions = []
+        for joint_name in selected_joint_names:
+            if joint_name in self.current_joint_positions:
+                start_positions[joint_name] = self.current_joint_positions[joint_name]
+            elif joint_name in self.last_commanded_joint_positions:
+                start_positions[joint_name] = self.last_commanded_joint_positions[
+                    joint_name
+                ]
+            else:
+                missing_start_positions.append(joint_name)
+
+        if missing_start_positions:
+            self._warn_throttled(
+                "ik_missing_joint_state",
+                "Cannot publish IK command without current joint positions for "
+                + ", ".join(missing_start_positions),
+                2.0,
+            )
+            return False
+
+        motion_scale = max(0.0, min(1.0, self.current_ik_motion_scale))
+        alpha = max(0.0, min(1.0, self.joint_smoothing_alpha)) * motion_scale
+        max_joint_delta_rad = self.max_joint_delta_rad * motion_scale
+        point = JointTrajectoryPoint()
+        for joint_name in selected_joint_names:
+            start = start_positions[joint_name]
+            desired = solution_positions[joint_name]
+            delta = (desired - start) * alpha
+            if max_joint_delta_rad > 0.0:
+                delta = max(
+                    -max_joint_delta_rad,
+                    min(max_joint_delta_rad, delta),
+                )
+            command = start + delta
+            point.positions.append(command)
+            self.last_commanded_joint_positions[joint_name] = command
+
+        point.time_from_start = Duration(
+            seconds=max(0.02, self.command_duration_sec)
+        ).to_msg()
+
+        trajectory = JointTrajectory()
+        trajectory.header.stamp = self.get_clock().now().to_msg()
+        trajectory.joint_names = selected_joint_names
+        trajectory.points = [point]
+        publisher.publish(trajectory)
+        return True
 
     def _on_goal_response(
         self,

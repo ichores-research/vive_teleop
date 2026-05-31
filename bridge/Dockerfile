@@ -45,6 +45,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-foxy-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
 
+# Install TF messages before building ros1_bridge so TF converters are generated.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-noetic-tf2-msgs \
+    ros-foxy-tf2-msgs \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /bridge_ws
 
 # Pull the specific branch matching our ROS 2 distro
@@ -69,5 +75,8 @@ RUN /bin/bash -c "source /opt/ros/noetic/setup.bash && \
 RUN echo 'source /opt/ros/noetic/setup.bash' >> /root/.bashrc \
     && echo 'source /opt/ros/foxy/setup.bash' >> /root/.bashrc \
     && echo 'source /bridge_ws/install/setup.bash' >> /root/.bashrc
+
+COPY filter_ros1_bridge_logs.py /usr/local/bin/filter_ros1_bridge_logs.py
+RUN chmod +x /usr/local/bin/filter_ros1_bridge_logs.py
 
 CMD ["/bin/bash"]

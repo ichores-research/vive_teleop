@@ -11,6 +11,9 @@ actor "Unity VR headset\nunity-vr-headset" as Unity
 node "Robot network\n10.68.0.0/24" as Net {
   node "Robot\nROS1 master\n10.68.0.1:11311" as Robot {
     component "ROS1 camera topic\n/xtion/rgb/image_raw" as Ros1Camera
+    component "ROS1 joint states\n/joint_states" as Ros1JointStates
+    component "ROS1 arm controller\n/arm_controller/command" as Ros1ArmCommand
+    component "ROS1 head command\n/look_cmd_vel_ps" as Ros1HeadCommand
   }
 
   node "ros1_bridge container\n10.68.0.131" as Bridge {
@@ -24,14 +27,19 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "InputPublisher\nROS2 node" as InputPublisher
     queue "ROS2 topic\n/vive/input_mock" as InputTopic
     queue "ROS2 topic\n/vive/head_pose" as HeadPoseTopic
+    queue "ROS2 topic\n/vive/wrist_pose" as WristPoseTopic
     queue "ROS2 topic\n/vive/hand_target_pose" as HandTargetTopic
     queue "ROS2 topic\n/vive/robot_wrist_orientation" as WristTopic
   }
 
   node "moveit_server container\n10.68.0.134" as MoveItContainer {
-    component "vive_moveit_server\nROS2 Humble + MoveIt" as MoveItServer
+    component "robot_state_publisher\nTIAGo description" as RobotStatePublisher
+    component "move_group\nTIAGo MoveIt config" as MoveGroup
+    component "vive_moveit_server\nPython ROS2 node\nexecution_mode=ik_topic" as MoveItServer
+    queue "ROS2 topic\n/joint_states" as JointStateTopic
     queue "ROS2 topic\n/vive/robot_head_pose" as RobotHeadTopic
-    queue "ROS2 topic\n/arm_controller/command\noptional trajectory mode" as ArmCommandTopic
+    queue "ROS2 topic\n/arm_controller/command" as ArmCommandTopic
+    interface "ROS2 service\n/compute_ik" as ComputeIkService
   }
 
   node "coturn container\n10.68.0.133:3478" as Coturn {
@@ -45,24 +53,37 @@ cloud "Docker host" as Host {
 
 Ros1Camera --> DynamicBridge : ROS1 topic
 DynamicBridge --> ImageSubscriber : ROS2 /xtion/rgb/image_raw
+Ros1JointStates --> DynamicBridge : ROS1 topic
+DynamicBridge --> JointStateTopic : ROS2 sensor_msgs/JointState
+ArmCommandTopic --> DynamicBridge : ROS2 trajectory_msgs/JointTrajectory
+DynamicBridge --> Ros1ArmCommand : ROS1 trajectory_msgs/JointTrajectory
+RobotHeadTopic --> DynamicBridge : ROS2 geometry_msgs/PoseStamped
+DynamicBridge --> Ros1HeadCommand : ROS1 geometry_msgs/PoseStamped
+
 ImageSubscriber --> VideoTrack : latest BGR frame
 VideoTrack --> WebRTCServer : media track
-WebRTCServer --> InputPublisher : data-channel messages
+WebRTCServer --> InputPublisher : data-channel JSON messages
 InputPublisher --> InputTopic : std_msgs/String
 InputPublisher --> HeadPoseTopic : geometry_msgs/PoseStamped
+InputPublisher --> WristPoseTopic : geometry_msgs/PoseStamped
 InputPublisher --> HandTargetTopic : geometry_msgs/PoseStamped
 InputPublisher --> WristTopic : geometry_msgs/QuaternionStamped
 HeadPoseTopic --> MoveItServer : pass-through head pose
-HandTargetTopic --> MoveItServer : MoveIt pose target
+HandTargetTopic --> MoveItServer : wrist pose target
+JointStateTopic --> MoveItServer : IK seed state
+RobotStatePublisher --> MoveGroup : robot_description + TF
+MoveGroup -- ComputeIkService : provides
+MoveItServer --> ComputeIkService : moveit_msgs/GetPositionIK\narm group, arm_tool_link
 MoveItServer --> RobotHeadTopic : solved head command as-is
-MoveItServer --> ArmCommandTopic : trajectory_msgs/JointTrajectory\nwhen execution_mode=trajectory_topic
+MoveItServer --> ArmCommandTopic : short JointTrajectory commands\nwarmup + joint delta clamp
 
 StaticServer --> Browser : serves index.html
 Browser --> WebRTCServer : HTTP POST /offer\nSDP offer/answer
 Browser --> WebRTCServer : HTTP POST /input_offer\nSDP offer/answer
+Browser --> WebRTCServer : input data channel\n10 Hz unity_teleop_pose
 Browser .. TurnRelay : ICE relay candidates
 
-Unity --> WebRTCServer : WebRTC video + input
+Unity --> WebRTCServer : WebRTC video + 6-DoF input
 Unity .. TurnRelay : ICE relay candidates
 
 note right of WebRTCServer
@@ -71,6 +92,15 @@ note right of WebRTCServer
 
   image_subscriber delegates to teleop_webrtc,
   which wires WebRTCServer to the ROS nodes.
+end note
+
+note right of MoveItServer
+  Default teleop path:
+  - arm-only MoveIt group
+  - torso_lift_joint locked out
+  - seeded /compute_ik from /joint_states
+  - publishes /arm_controller/command
+  - retries -31 with last reachable orientation
 end note
 
 note bottom of Net

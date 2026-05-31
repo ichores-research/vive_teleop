@@ -15,7 +15,7 @@ services:
         unset ROS_DISTRO
         source /opt/ros/foxy/setup.bash
         source /bridge_ws/install/setup.bash
-        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
+        exec /usr/local/bin/filter_ros1_bridge_logs.py ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
     networks:
       field_net:
         ipv4_address: 10.68.0.131

@@ -46,6 +46,8 @@ class WebRtcInputPublisher(Node):
             10,
         )
         self._topic = topic
+        self._last_input_log_sec = 0.0
+        self._input_log_interval_sec = 2.0
 
     def publish_input(self, payload: str | bytes) -> None:
         message = String()
@@ -57,8 +59,13 @@ class WebRtcInputPublisher(Node):
             self._publish_head_pose(data)
             self._publish_wrist_pose(data)
             self._publish_hand_target(data)
-        preview = message.data[:200] + ("..." if len(message.data) > 200 else "")
-        self.get_logger().info(f"WebRTC input forwarded to {self._topic}: {preview}")
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        if now_sec - self._last_input_log_sec >= self._input_log_interval_sec:
+            preview = message.data[:200] + ("..." if len(message.data) > 200 else "")
+            self.get_logger().info(
+                f"WebRTC input forwarded to {self._topic}: {preview}"
+            )
+            self._last_input_log_sec = now_sec
 
     @staticmethod
     def _serialize_payload(payload: str | bytes) -> str:
