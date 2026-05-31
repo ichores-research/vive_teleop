@@ -25,11 +25,8 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "LatestFrameVideoTrack" as VideoTrack
     component "WebRTCServer\naiohttp + aiortc" as WebRTCServer
     component "InputPublisher\nROS2 node" as InputPublisher
-    queue "ROS2 topic\n/vive/input_mock" as InputTopic
     queue "ROS2 topic\n/vive/head_pose" as HeadPoseTopic
-    queue "ROS2 topic\n/vive/wrist_pose" as WristPoseTopic
     queue "ROS2 topic\n/vive/hand_target_pose" as HandTargetTopic
-    queue "ROS2 topic\n/vive/robot_wrist_orientation" as WristTopic
   }
 
   node "moveit_server container\n10.68.0.134" as MoveItContainer {
@@ -63,11 +60,8 @@ DynamicBridge --> Ros1HeadCommand : ROS1 geometry_msgs/PoseStamped
 ImageSubscriber --> VideoTrack : latest BGR frame
 VideoTrack --> WebRTCServer : media track
 WebRTCServer --> InputPublisher : data-channel JSON messages
-InputPublisher --> InputTopic : std_msgs/String
 InputPublisher --> HeadPoseTopic : geometry_msgs/PoseStamped
-InputPublisher --> WristPoseTopic : geometry_msgs/PoseStamped
 InputPublisher --> HandTargetTopic : geometry_msgs/PoseStamped
-InputPublisher --> WristTopic : geometry_msgs/QuaternionStamped
 HeadPoseTopic --> MoveItServer : pass-through head pose
 HandTargetTopic --> MoveItServer : wrist pose target
 JointStateTopic --> MoveItServer : IK seed state

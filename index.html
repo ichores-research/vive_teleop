@@ -400,15 +400,6 @@
                 <h2>Input</h2>
                 <div class="input-panels">
                     <section class="input-panel">
-                        <h3>Debug</h3>
-                        <textarea id="debugPayload" spellcheck="false">{"type":"debug","x":0,"y":0,"z":0}</textarea>
-                        <div class="quick-inputs">
-                            <button id="sendDebugBtn" disabled>Send Debug</button>
-                            <button id="sendStopBtn" class="secondary" disabled>Send Stop</button>
-                        </div>
-                    </section>
-
-                    <section class="input-panel">
                         <h3>Head</h3>
                         <label>
                             Frame
@@ -490,13 +481,10 @@
         const disconnectBtn = document.getElementById('disconnectBtn');
         const hostServerBtn = document.getElementById('hostServerBtn');
         const containerServerBtn = document.getElementById('containerServerBtn');
-        const sendDebugBtn = document.getElementById('sendDebugBtn');
         const sendHeadBtn = document.getElementById('sendHeadBtn');
         const sendWristBtn = document.getElementById('sendWristBtn');
         const sendCombinedBtn = document.getElementById('sendCombinedBtn');
-        const sendStopBtn = document.getElementById('sendStopBtn');
         const clearLogBtn = document.getElementById('clearLogBtn');
-        const debugPayloadEl = document.getElementById('debugPayload');
         const videoEl = document.getElementById('videoStream');
         const videoStatusEl = document.getElementById('videoStatus');
         const inputStatusEl = document.getElementById('inputStatus');
@@ -660,11 +648,9 @@
             startVideoBtn.disabled = Boolean(videoPc);
             connectInputBtn.disabled = Boolean(inputPc);
             disconnectBtn.disabled = !videoPc && !inputPc;
-            sendDebugBtn.disabled = !inputOpen;
             sendHeadBtn.disabled = !inputOpen;
             sendWristBtn.disabled = !inputOpen;
             sendCombinedBtn.disabled = !inputOpen;
-            sendStopBtn.disabled = !inputOpen;
         }
 
         function captureInputState() {
@@ -944,13 +930,9 @@
             sendInput(JSON.stringify(payload), options);
         }
 
-        function sendDebugPayload() {
-            sendInput(debugPayloadEl.value);
-        }
-
         function sendHeadPayload() {
             sendPayloadObject({
-                type: 'debug_head_pose',
+                type: 'browser_head_pose',
                 timestamp: timestampSeconds(),
                 ...headFields(),
                 wristAvailable: false,
@@ -959,7 +941,7 @@
 
         function sendWristPayload() {
             sendPayloadObject({
-                type: 'debug_wrist_pose',
+                type: 'browser_wrist_target',
                 timestamp: timestampSeconds(),
                 hmdAvailable: false,
                 ...wristFields(),
@@ -1010,13 +992,9 @@
             serverUrlEl.value = 'http://10.68.0.132:8088';
             log(`Server set to ${serverUrlEl.value}`);
         });
-        sendDebugBtn.addEventListener('click', sendDebugPayload);
         sendHeadBtn.addEventListener('click', sendHeadPayload);
         sendWristBtn.addEventListener('click', sendWristPayload);
         sendCombinedBtn.addEventListener('click', sendCombinedPayload);
-        sendStopBtn.addEventListener('click', () => {
-            sendInput(JSON.stringify({ type: 'stop', timestamp: timestampSeconds() }));
-        });
         clearLogBtn.addEventListener('click', () => {
             logEl.textContent = '';
         });

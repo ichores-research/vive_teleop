@@ -19,7 +19,7 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
 - `image_listener/image_subscriber.py`: ROS2 image subscriber for `/xtion/rgb/image_raw`.
 - `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
-- `image_listener/input_publisher.py`: ROS2 publisher for raw WebRTC input messages on `/vive/input_mock`, typed pose topics on `/vive/head_pose`, `/vive/wrist_pose`, `/vive/hand_target_pose`, and calibrated wrist orientation commands on `/vive/robot_wrist_orientation`.
+- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose` and `/vive/hand_target_pose`.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
 See [architecture.puml](architecture.puml) for the PlantUML source. Regenerate [architecture.png](architecture.png) from it when a rendered diagram is needed.
@@ -55,22 +55,16 @@ Client expectation:
 
 ### `POST /input_offer`
 
-Accepts a WebRTC offer for an input data channel and returns an answer. Messages received on the data channel are forwarded to the raw ROS2 debug topic `/vive/input_mock`.
+Accepts a WebRTC offer for an input data channel and returns an answer.
 
-String payloads are published as-is. Binary payloads are encoded as JSON with base64 data.
+String payloads are parsed as JSON. Binary payloads are decoded as UTF-8 before parsing.
 
 The browser debug client snapshots the displayed input values when the input data channel opens, then streams a `unity_teleop_pose` payload at 10 Hz. Use the number-input arrows to make small changes while the stream continues.
 
-When a payload includes pose fields, `ros2_app` also publishes standard ROS2 messages:
+When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages:
 
 - `/vive/head_pose`: `geometry_msgs/PoseStamped` copied from the HMD pose.
-- `/vive/wrist_pose`: `geometry_msgs/PoseStamped` copied from the joystick/controller wrist pose.
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped` using the joystick wrist position and calibrated `robotWristR*` orientation.
-- `/vive/robot_wrist_orientation`: `geometry_msgs/QuaternionStamped` with only the calibrated wrist orientation.
-
-```bash
-ros2 topic echo /vive/robot_wrist_orientation
-```
 
 ## MoveIt server
 
@@ -208,7 +202,7 @@ By default the input payload includes:
 
 - HMD pose from the main camera.
 - Right-hand XR controller / 6-DoF joystick wrist pose from `XRNode.RightHand`.
-- A calibrated relative `robotWristR*` quaternion, published by `ros2_app` as `/vive/robot_wrist_orientation` and used in `/vive/hand_target_pose`.
+- A calibrated relative `robotWristR*` quaternion, used in `/vive/hand_target_pose`.
 - Joystick axis, trigger, grip, and primary button values when the device exposes them through Unity XR.
 
 Press `R` in the Unity player to recalibrate the current wrist orientation as neutral. If the joystick is represented by a custom tracked GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`; otherwise the right-hand XR node is used.
