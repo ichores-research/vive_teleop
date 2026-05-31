@@ -2,17 +2,24 @@ vive_moveit_server:
   ros__parameters:
     # TIAGo single MoveIt configs commonly expose either "arm_torso" or "arm".
     arm_group: arm_torso
-    end_effector_link: ""
+    end_effector_link: arm_tool_link
 
     head_input_topic: /vive/head_pose
-    head_output_topic: /vive/robot_head_pose
+    # Robot-side solved-head command topic. /vive/robot_head_pose is retained as
+    # an extra debug output below.
+    head_output_topic: /look_cmd_vel_ps
+    head_extra_output_topics:
+      - /vive/robot_head_pose
     hand_target_topic: /vive/hand_target_pose
+    move_group_action_name: /move_action
 
-    # "moveit" executes through MoveIt controllers. "trajectory_topic" publishes
-    # the planned JointTrajectory for a bridgeable ROS controller topic.
+    # "trajectory_topic" asks MoveIt to plan, then publishes the planned
+    # JointTrajectory segments to bridgeable ROS controller topics.
+    # Use "moveit" only when ROS2 controller actions are available to MoveIt.
     # "plan_only" validates planning without commanding the robot.
-    execution_mode: moveit
+    execution_mode: trajectory_topic
     arm_command_topic: /arm_controller/command
+    torso_command_topic: /torso_controller/command
     async_execution: true
 
     # The server treats incoming hand target coordinates as this robot frame.
@@ -25,6 +32,24 @@ vive_moveit_server:
     min_plan_interval_sec: 0.25
     position_deadband_m: 0.01
     orientation_deadband_rad: 0.035
+    goal_position_tolerance_m: 0.01
+    goal_orientation_tolerance_rad: 0.035
+    num_planning_attempts: 1
+    wait_for_move_group_timeout_sec: 0.0
+    max_hand_target_distance_m: 1.5
+    min_hand_target_z_m: 0.2
+    max_hand_target_z_m: 1.6
 
     hand_position_scale: [1.0, 1.0, 1.0]
     hand_position_offset: [0.0, 0.0, 0.0]
+
+    arm_joint_names:
+      - arm_1_joint
+      - arm_2_joint
+      - arm_3_joint
+      - arm_4_joint
+      - arm_5_joint
+      - arm_6_joint
+      - arm_7_joint
+    torso_joint_names:
+      - torso_lift_joint

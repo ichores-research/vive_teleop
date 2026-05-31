@@ -202,7 +202,7 @@
 
         .workspace {
             display: grid;
-            grid-template-columns: minmax(320px, 1fr) minmax(280px, 380px);
+            grid-template-columns: minmax(320px, 1fr) minmax(360px, 480px);
             min-height: 0;
         }
 
@@ -227,7 +227,7 @@
 
         aside {
             display: grid;
-            grid-template-rows: auto 1fr auto;
+            grid-template-rows: auto 1fr;
             gap: 12px;
             min-width: 0;
             border-left: 1px solid var(--border);
@@ -245,6 +245,48 @@
             display: grid;
             gap: 8px;
             align-content: start;
+        }
+
+        .input-panels {
+            display: grid;
+            gap: 12px;
+            min-height: 0;
+            overflow: auto;
+            padding-right: 2px;
+        }
+
+        .input-panel {
+            display: grid;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel-2);
+        }
+
+        .input-panel h3 {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .field-grid.three {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .field-grid.two {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .field-grid input {
+            height: 34px;
+            padding: 6px 8px;
         }
 
         .log-panel {
@@ -288,6 +330,12 @@
             aside {
                 border-left: 0;
                 border-top: 1px solid var(--border);
+            }
+
+            .field-grid,
+            .field-grid.three,
+            .field-grid.two {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
             video {
@@ -334,7 +382,7 @@
             </label>
             <div class="button-row">
                 <label class="relay-toggle">
-                    <input id="relayOnly" type="checkbox" checked>
+                    <input id="relayOnly" type="checkbox">
                     Relay only
                 </label>
                 <button id="startVideoBtn">Start Video</button>
@@ -349,12 +397,77 @@
             </div>
 
             <aside>
-                <h2>Input Payload</h2>
-                <textarea id="inputPayload" spellcheck="false">{"type":"debug","x":0,"y":0,"z":0}</textarea>
-                <div class="quick-inputs">
-                    <button id="sendInputBtn" disabled>Send Payload</button>
-                    <button id="sendPoseBtn" class="secondary" disabled>Send Pose</button>
-                    <button id="sendStopBtn" class="secondary" disabled>Send Stop</button>
+                <h2>Input</h2>
+                <div class="input-panels">
+                    <section class="input-panel">
+                        <h3>Debug</h3>
+                        <textarea id="debugPayload" spellcheck="false">{"type":"debug","x":0,"y":0,"z":0}</textarea>
+                        <div class="quick-inputs">
+                            <button id="sendDebugBtn" disabled>Send Debug</button>
+                            <button id="sendStopBtn" class="secondary" disabled>Send Stop</button>
+                        </div>
+                    </section>
+
+                    <section class="input-panel">
+                        <h3>Head</h3>
+                        <label>
+                            Frame
+                            <input id="headFrame" value="unity_world" spellcheck="false">
+                        </label>
+                        <div class="field-grid three">
+                            <label>X <input id="headPx" type="number" step="0.01" value="0"></label>
+                            <label>Y <input id="headPy" type="number" step="0.01" value="1.4"></label>
+                            <label>Z <input id="headPz" type="number" step="0.01" value="0"></label>
+                        </div>
+                        <div class="field-grid">
+                            <label>QX <input id="headRx" type="number" step="0.01" value="0"></label>
+                            <label>QY <input id="headRy" type="number" step="0.01" value="0"></label>
+                            <label>QZ <input id="headRz" type="number" step="0.01" value="0"></label>
+                            <label>QW <input id="headRw" type="number" step="0.01" value="1"></label>
+                        </div>
+                        <div class="quick-inputs">
+                            <button id="sendHeadBtn" disabled>Send Head</button>
+                        </div>
+                    </section>
+
+                    <section class="input-panel">
+                        <h3>Wrist</h3>
+                        <div class="field-grid two">
+                            <label>
+                                Wrist Frame
+                                <input id="wristFrame" value="unity_world" spellcheck="false">
+                            </label>
+                            <label>
+                                Robot Frame
+                                <input id="robotWristFrame" value="base_footprint" spellcheck="false">
+                            </label>
+                        </div>
+                        <div class="field-grid three">
+                            <label>X <input id="wristPx" type="number" step="0.01" value="0.45"></label>
+                            <label>Y <input id="wristPy" type="number" step="0.01" value="0"></label>
+                            <label>Z <input id="wristPz" type="number" step="0.01" value="0.9"></label>
+                        </div>
+                        <div class="field-grid">
+                            <label>QX <input id="wristRx" type="number" step="0.01" value="0"></label>
+                            <label>QY <input id="wristRy" type="number" step="0.01" value="0"></label>
+                            <label>QZ <input id="wristRz" type="number" step="0.01" value="0"></label>
+                            <label>QW <input id="wristRw" type="number" step="0.01" value="1"></label>
+                        </div>
+                        <div class="field-grid">
+                            <label>RQX <input id="robotWristRx" type="number" step="0.01" value="0"></label>
+                            <label>RQY <input id="robotWristRy" type="number" step="0.01" value="0"></label>
+                            <label>RQZ <input id="robotWristRz" type="number" step="0.01" value="0"></label>
+                            <label>RQW <input id="robotWristRw" type="number" step="0.01" value="1"></label>
+                        </div>
+                        <div class="field-grid two">
+                            <label>Joy X <input id="joystickAxisX" type="number" step="0.01" value="0"></label>
+                            <label>Joy Y <input id="joystickAxisY" type="number" step="0.01" value="0"></label>
+                        </div>
+                        <div class="quick-inputs">
+                            <button id="sendWristBtn" disabled>Send Wrist</button>
+                            <button id="sendCombinedBtn" class="secondary" disabled>Send Head + Wrist</button>
+                        </div>
+                    </section>
                 </div>
             </aside>
         </section>
@@ -377,31 +490,62 @@
         const disconnectBtn = document.getElementById('disconnectBtn');
         const hostServerBtn = document.getElementById('hostServerBtn');
         const containerServerBtn = document.getElementById('containerServerBtn');
-        const sendInputBtn = document.getElementById('sendInputBtn');
-        const sendPoseBtn = document.getElementById('sendPoseBtn');
+        const sendDebugBtn = document.getElementById('sendDebugBtn');
+        const sendHeadBtn = document.getElementById('sendHeadBtn');
+        const sendWristBtn = document.getElementById('sendWristBtn');
+        const sendCombinedBtn = document.getElementById('sendCombinedBtn');
         const sendStopBtn = document.getElementById('sendStopBtn');
         const clearLogBtn = document.getElementById('clearLogBtn');
-        const inputPayloadEl = document.getElementById('inputPayload');
+        const debugPayloadEl = document.getElementById('debugPayload');
         const videoEl = document.getElementById('videoStream');
         const videoStatusEl = document.getElementById('videoStatus');
         const inputStatusEl = document.getElementById('inputStatus');
         const logEl = document.getElementById('log');
+        const inputControls = {
+            headFrame: document.getElementById('headFrame'),
+            headPx: document.getElementById('headPx'),
+            headPy: document.getElementById('headPy'),
+            headPz: document.getElementById('headPz'),
+            headRx: document.getElementById('headRx'),
+            headRy: document.getElementById('headRy'),
+            headRz: document.getElementById('headRz'),
+            headRw: document.getElementById('headRw'),
+            wristFrame: document.getElementById('wristFrame'),
+            robotWristFrame: document.getElementById('robotWristFrame'),
+            wristPx: document.getElementById('wristPx'),
+            wristPy: document.getElementById('wristPy'),
+            wristPz: document.getElementById('wristPz'),
+            wristRx: document.getElementById('wristRx'),
+            wristRy: document.getElementById('wristRy'),
+            wristRz: document.getElementById('wristRz'),
+            wristRw: document.getElementById('wristRw'),
+            robotWristRx: document.getElementById('robotWristRx'),
+            robotWristRy: document.getElementById('robotWristRy'),
+            robotWristRz: document.getElementById('robotWristRz'),
+            robotWristRw: document.getElementById('robotWristRw'),
+            joystickAxisX: document.getElementById('joystickAxisX'),
+            joystickAxisY: document.getElementById('joystickAxisY'),
+        };
 
         let videoPc = null;
         let inputPc = null;
         let inputChannel = null;
 
         const params = new URLSearchParams(window.location.search);
+        const serverParamProvided = params.has('server');
+        const turnParamProvided = params.has('turn');
         serverUrlEl.value = hostServerUrl();
         turnUrlEl.value = hostTurnUrls();
 
-        if (params.has('server')) {
+        if (serverParamProvided) {
             serverUrlEl.value = params.get('server');
         }
 
-        if (params.has('turn')) {
+        if (turnParamProvided) {
             turnUrlEl.value = params.get('turn');
         }
+
+        const configLoadPromise = loadServerConfig();
 
         function setStatus(element, text, tone) {
             element.textContent = text;
@@ -418,6 +562,41 @@
 
         function endpoint(path) {
             return `${serverUrlEl.value.replace(/\/+$/, '')}${path}`;
+        }
+
+        async function loadServerConfig() {
+            try {
+                const response = await fetch(endpoint('/config'));
+                if (!response.ok) {
+                    return;
+                }
+
+                const config = await response.json();
+                if (!serverParamProvided && config.serverUrl) {
+                    serverUrlEl.value = config.serverUrl;
+                }
+
+                if (!turnParamProvided && Array.isArray(config.iceServers)) {
+                    const urls = [];
+                    for (const iceServer of config.iceServers) {
+                        if (!iceServer || !iceServer.urls) {
+                            continue;
+                        }
+                        if (Array.isArray(iceServer.urls)) {
+                            urls.push(...iceServer.urls);
+                        } else {
+                            urls.push(iceServer.urls);
+                        }
+                    }
+                    if (urls.length) {
+                        turnUrlEl.value = urls.join(',');
+                    }
+                }
+
+                log(`Loaded WebRTC config from ${endpoint('/config')}`);
+            } catch (error) {
+                log(`Could not load WebRTC config: ${error.message}`);
+            }
         }
 
         function hostServerUrl() {
@@ -478,8 +657,10 @@
             startVideoBtn.disabled = Boolean(videoPc);
             connectInputBtn.disabled = Boolean(inputPc);
             disconnectBtn.disabled = !videoPc && !inputPc;
-            sendInputBtn.disabled = !inputOpen;
-            sendPoseBtn.disabled = !inputOpen;
+            sendDebugBtn.disabled = !inputOpen;
+            sendHeadBtn.disabled = !inputOpen;
+            sendWristBtn.disabled = !inputOpen;
+            sendCombinedBtn.disabled = !inputOpen;
             sendStopBtn.disabled = !inputOpen;
         }
 
@@ -508,6 +689,8 @@
         }
 
         async function exchangeOffer(pc, path) {
+            await configLoadPromise;
+
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             await waitForIceGathering(pc);
@@ -628,6 +811,89 @@
             log(`Sent input: ${payload}`);
         }
 
+        function numberValue(id) {
+            const value = Number(inputControls[id].value);
+            return Number.isFinite(value) ? value : 0;
+        }
+
+        function timestampSeconds() {
+            return Date.now() / 1000;
+        }
+
+        function headFields() {
+            return {
+                hmdAvailable: true,
+                hmdFrame: inputControls.headFrame.value || 'unity_world',
+                hmdPx: numberValue('headPx'),
+                hmdPy: numberValue('headPy'),
+                hmdPz: numberValue('headPz'),
+                hmdRx: numberValue('headRx'),
+                hmdRy: numberValue('headRy'),
+                hmdRz: numberValue('headRz'),
+                hmdRw: numberValue('headRw'),
+            };
+        }
+
+        function wristFields() {
+            return {
+                wristAvailable: true,
+                wristSource: 'debug_page',
+                wristFrame: inputControls.wristFrame.value || 'unity_world',
+                wristPx: numberValue('wristPx'),
+                wristPy: numberValue('wristPy'),
+                wristPz: numberValue('wristPz'),
+                wristRx: numberValue('wristRx'),
+                wristRy: numberValue('wristRy'),
+                wristRz: numberValue('wristRz'),
+                wristRw: numberValue('wristRw'),
+                robotWristFrame: inputControls.robotWristFrame.value || 'base_footprint',
+                robotWristRx: numberValue('robotWristRx'),
+                robotWristRy: numberValue('robotWristRy'),
+                robotWristRz: numberValue('robotWristRz'),
+                robotWristRw: numberValue('robotWristRw'),
+                joystickAxisX: numberValue('joystickAxisX'),
+                joystickAxisY: numberValue('joystickAxisY'),
+                joystickTrigger: 0,
+                joystickGrip: 0,
+                joystickPrimaryButton: false,
+            };
+        }
+
+        function sendPayloadObject(payload) {
+            sendInput(JSON.stringify(payload));
+        }
+
+        function sendDebugPayload() {
+            sendInput(debugPayloadEl.value);
+        }
+
+        function sendHeadPayload() {
+            sendPayloadObject({
+                type: 'debug_head_pose',
+                timestamp: timestampSeconds(),
+                ...headFields(),
+                wristAvailable: false,
+            });
+        }
+
+        function sendWristPayload() {
+            sendPayloadObject({
+                type: 'debug_wrist_pose',
+                timestamp: timestampSeconds(),
+                hmdAvailable: false,
+                ...wristFields(),
+            });
+        }
+
+        function sendCombinedPayload() {
+            sendPayloadObject({
+                type: 'unity_teleop_pose',
+                timestamp: timestampSeconds(),
+                ...headFields(),
+                ...wristFields(),
+            });
+        }
+
         async function closeVideo() {
             if (videoPc) {
                 videoPc.close();
@@ -667,17 +933,12 @@
             serverUrlEl.value = 'http://10.68.0.132:8088';
             log(`Server set to ${serverUrlEl.value}`);
         });
-        sendInputBtn.addEventListener('click', () => sendInput(inputPayloadEl.value));
-        sendPoseBtn.addEventListener('click', () => {
-            sendInput(JSON.stringify({
-                type: 'pose',
-                position: { x: 0.1, y: 1.2, z: -0.3 },
-                rotation: { x: 0, y: 0, z: 0, w: 1 },
-                timestamp: Date.now(),
-            }));
-        });
+        sendDebugBtn.addEventListener('click', sendDebugPayload);
+        sendHeadBtn.addEventListener('click', sendHeadPayload);
+        sendWristBtn.addEventListener('click', sendWristPayload);
+        sendCombinedBtn.addEventListener('click', sendCombinedPayload);
         sendStopBtn.addEventListener('click', () => {
-            sendInput(JSON.stringify({ type: 'stop', timestamp: Date.now() }));
+            sendInput(JSON.stringify({ type: 'stop', timestamp: timestampSeconds() }));
         });
         clearLogBtn.addEventListener('click', () => {
             logEl.textContent = '';

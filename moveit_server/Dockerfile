@@ -12,13 +12,20 @@ WORKDIR /moveit_ws
 RUN apt-get update && apt-get install -y \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-moveit \
+    ros-humble-tiago-moveit-config \
+    ros-humble-pick-ik \
     python3-colcon-common-extensions \
+    python3-setuptools \
     build-essential \
     cmake \
     git \
     curl \
     nano \
     && rm -rf /var/lib/apt/lists/*
+
+COPY tiago_pick_ik_kinematics.yaml /tmp/tiago_pick_ik_kinematics.yaml
+RUN cp /tmp/tiago_pick_ik_kinematics.yaml \
+    /opt/ros/humble/share/tiago_moveit_config/config/kinematics.yaml
 
 COPY src /moveit_ws/src
 

@@ -99,6 +99,7 @@ services:
     restart: unless-stopped
     network_mode: host
     command:
+      - --listening-ip=127.0.0.1
       - --listening-ip=${WEBRTC_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_HOST_IP}
       - --listening-ip=${ROS_FIELD_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set ROS_FIELD_HOST_IP}
       - --relay-ip=${WEBRTC_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_HOST_IP}

@@ -10,7 +10,7 @@ The current system has five main pieces:
 
 - `ros1_bridge`: ROS1 Noetic to ROS2 Foxy dynamic bridge. It connects to the robot ROS master and exposes ROS1 topics into ROS2.
 - `ros2_app`: ROS2 Humble application. It waits for `/xtion/rgb/image_raw`, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
-- `moveit_server`: ROS2 Humble MoveIt teleoperation node. It consumes typed WebRTC pose topics, forwards solved head pose commands, and plans TIAGo arm motion.
+- `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, forwards solved head pose commands, and sends TIAGo arm goals to MoveIt.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
 
@@ -72,30 +72,36 @@ ros2 topic echo /vive/robot_wrist_orientation
 
 ## MoveIt server
 
-The separate `moveit_server` container is ROS2 Humble. It joins the same CycloneDDS graph as `ros2_app`, so it receives the WebRTC topics directly on the ROS2 side of the bridge.
+The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app`, so it receives the WebRTC topics directly on the ROS2 side of the bridge. It is implemented in Python and talks to MoveIt through `moveit_msgs/action/MoveGroup` on `/move_action`. By default the container installs and starts Humble's `tiago_moveit_config` `move_group.launch.py` before the teleop node.
 
 Default behavior:
 
-- Subscribes to `/vive/head_pose` and republishes the message unchanged to `/vive/robot_head_pose`. Point `head_output_topic` at the robot-side solved-head command topic if that topic is already bridged.
-- Subscribes to `/vive/hand_target_pose` and sends the target pose to MoveIt group `arm_torso`.
-- Uses the target orientation from the calibrated 6-DoF joystick wrist quaternion. The rest of the arm is solved by the MoveIt kinematics plugin configured for the TIAGo group. Set the TIAGo MoveIt `kinematics.yaml` group solver to your bio solver, for example `bio_ik/BioIKKinematicsPlugin`, in the MoveIt config you launch or mount.
-- `execution_mode: moveit` executes through MoveIt controllers. Set `execution_mode: trajectory_topic` to publish the planned `trajectory_msgs/JointTrajectory` to `/arm_controller/command` for a bridgeable robot controller topic, or `plan_only` while testing.
+- Subscribes to `/vive/head_pose` and republishes the message unchanged to `/look_cmd_vel_ps`, with a debug copy on `/vive/robot_head_pose`. Point `head_output_topic` at the correct robot-side solved-head command topic if your robot uses another bridged `PoseStamped` topic.
+- Subscribes to `/vive/hand_target_pose` and sends pose constraints to MoveIt group `arm_torso`.
+- Uses the target orientation from the calibrated 6-DoF joystick wrist quaternion. The rest of the arm is solved by the MoveIt kinematics plugin configured for the TIAGo group. The image overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik`, the ROS2 MoveIt IK solver that reimplements the main `bio_ik` behavior.
+- `execution_mode: trajectory_topic` asks MoveIt to plan, then publishes the planned arm trajectory to `/arm_controller/command` and torso trajectory to `/torso_controller/command`, both of which are bridgeable to ROS1. Set `execution_mode: moveit` only when ROS2 controller actions are available to MoveIt, or `plan_only` while testing.
+- Waits for the MoveIt action server before sending arm goals, so missing TIAGo MoveIt config no longer crashes the teleop node.
 
 Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_params.yaml`. For a real robot, check at least:
 
 - `arm_group`: `arm_torso` or `arm`, matching your TIAGo MoveIt config.
-- `end_effector_link`: the TIAGo wrist/tool link if MoveIt cannot infer it.
+- `end_effector_link`: the TIAGo wrist/tool link used in MoveIt constraints. The default is `arm_tool_link`.
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
+- `move_group_action_name`: defaults to `/move_action`; adjust if your MoveIt launch exposes the MoveGroup action elsewhere.
+- `arm_command_topic` and `torso_command_topic`: trajectory topics bridged to the ROS1 robot controllers.
+- `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before planning.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
 
-The node stays alive if MoveIt is not ready yet, forwards head poses immediately, and retries MoveIt initialization before arm planning.
+The node stays alive if MoveIt is not ready yet, forwards head poses immediately, and waits for the MoveIt action server before arm planning.
 
-If the TIAGo MoveIt config is available inside the container, include it from the same launch command:
+To disable the bundled TIAGo MoveIt launch and wait for an external MoveGroup server instead:
 
 ```bash
-MOVEIT_SERVER_LAUNCH_ARGS="moveit_launch_package:=<tiago_moveit_config_pkg> moveit_launch_file:=<launch_file>.launch.py" \
+MOVEIT_SERVER_LAUNCH_ARGS="moveit_launch_enabled:=false" \
   sudo docker compose up --build moveit_server
 ```
+
+To pass robot variant arguments through to TIAGo MoveIt, set `moveit_arm`, `moveit_arm_type`, `moveit_base_type`, `moveit_end_effector`, and/or `moveit_ft_sensor` in `MOVEIT_SERVER_LAUNCH_ARGS`. `moveit_allow_trajectory_execution` defaults to `False`; the teleop node commands the real ROS1 robot by publishing planned trajectories to the bridged controller topics instead.
 
 ## Running
 
@@ -143,7 +149,7 @@ The script detects the current Wi-Fi host IP, exports `WEBRTC_HOST_IP`, detects 
 - `coturn_wifi` on the host network, listening on both the Wi-Fi IP and the field-network host IP.
 - local ROS2 bridge/app discovery over loopback by default with `ROS2_DDS_INTERFACE=lo`.
 - client-side ICE with `WEBRTC_PUBLIC_TURN_URLS=turn:<wifi-host-ip>:3478?...`.
-- server-side ICE with `WEBRTC_TURN_URLS=turn:<wifi-host-ip>:3478?...`.
+- server-side ICE with `WEBRTC_TURN_URLS=turn:127.0.0.1:3478?...` inside the host-network ROS2 app.
 
 This avoids passing WebRTC media through Docker port publishing; Unity and browser clients talk directly to the host Wi-Fi IP.
 
