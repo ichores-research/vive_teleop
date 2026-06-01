@@ -72,7 +72,7 @@ The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_
 
 Default behavior:
 
-- Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into `head_pan_joint` and `head_tilt_joint`, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/command`.
+- Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into TIAGo head pan/tilt joints, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/command`.
 - Publishes head commands at a fixed 20 Hz by default, with `time_from_start` set to `0.06` seconds so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
 - Applies a `0.01` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
@@ -89,7 +89,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `arm_group`: currently `arm` to force no torso. `arm_torso` allows torso motion if you deliberately want it.
 - `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
 - `head_command_topic`: trajectory topic bridged to the ROS1 head controller, default `/head_controller/command`.
-- `head_joint_names`: must be `head_pan_joint` and `head_tilt_joint` for TIAGo.
+- `head_joint_names`: must match the robot's head joints, typically `head_1_joint` and `head_2_joint` for this TIAGo.
 - `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.06` seconds.
 - `head_deadband_rad`: suppresses tiny pan/tilt updates; default `0.01` rad.
 - `head_pan_limits_rad`, `head_tilt_limits_rad`, and `head_limit_scale`: clamp output to a safe fraction of the real controller limits; default scale is `0.9`.

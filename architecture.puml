@@ -68,7 +68,7 @@ JointStateTopic --> MoveItServer : IK seed state
 RobotStatePublisher --> MoveGroup : robot_description + TF
 MoveGroup -- ComputeIkService : provides
 MoveItServer --> ComputeIkService : moveit_msgs/GetPositionIK\narm group, arm_tool_link
-MoveItServer --> HeadCommandTopic : head_pan_joint + head_tilt_joint\n20 Hz, deadband, 90% limits
+MoveItServer --> HeadCommandTopic : head_1_joint + head_2_joint\n20 Hz, deadband, 90% limits
 MoveItServer --> ArmCommandTopic : short JointTrajectory commands\nwarmup + joint delta clamp
 
 StaticServer --> Browser : serves index.html

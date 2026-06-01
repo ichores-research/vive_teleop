@@ -148,14 +148,14 @@ class ViveMoveItServer(Node):
         self.head_joint_names = _declare_string_list_parameter(
             self,
             "head_joint_names",
-            ["head_pan_joint", "head_tilt_joint"],
+            ["head_1_joint", "head_2_joint"],
         )
         if len(self.head_joint_names) != 2:
             self.get_logger().warn(
                 "head_joint_names must contain exactly pan and tilt joints; "
                 "using TIAGo defaults"
             )
-            self.head_joint_names = ["head_pan_joint", "head_tilt_joint"]
+            self.head_joint_names = ["head_1_joint", "head_2_joint"]
         hand_target_topic = self.declare_parameter(
             "hand_target_topic",
             "/vive/hand_target_pose",
@@ -444,7 +444,8 @@ class ViveMoveItServer(Node):
         pan = self._clamp_head_joint(pan, self.head_pan_limits_rad)
         tilt = self._clamp_head_joint(tilt, self.head_tilt_limits_rad)
 
-        if self._inside_head_deadband(pan, tilt):
+        inside_deadband = self._inside_head_deadband(pan, tilt)
+        if inside_deadband:
             return
 
         point = JointTrajectoryPoint()

@@ -27,6 +27,8 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     [Header("Input")]
     public bool connectInput = true;
     public bool sendHmdPose = true;
+    public bool hmdPoseStreamingEnabled;
+    public KeyCode toggleHmdPoseKey = KeyCode.S;
     public Transform poseSource;
     public float poseSendRateHz = 30f;
     public bool sendPoseWhenChannelOpens = true;
@@ -79,6 +81,14 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
     void LateUpdate()
     {
+        if (Input.GetKeyDown(toggleHmdPoseKey))
+        {
+            hmdPoseStreamingEnabled = !hmdPoseStreamingEnabled;
+            Debug.Log(
+                $"ViveTeleop WebRTC: HMD pose streaming {(hmdPoseStreamingEnabled ? "enabled" : "disabled")}."
+            );
+        }
+
         if (Input.GetKeyDown(recalibrateWristKey))
         {
             CalibrateWristRotation();
@@ -391,12 +401,6 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             return;
         }
 
-        var hmdSource = poseSource;
-        if (hmdSource == null && Camera.main != null)
-        {
-            hmdSource = Camera.main.transform;
-        }
-
         var payload = new PosePayload
         {
             type = "unity_teleop_pose",
@@ -404,18 +408,27 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             headsetRecenter = recenterHeadsetPoseOnNextSample,
         };
 
-        if (sendHmdPose && hmdSource != null)
+        if (sendHmdPose && hmdPoseStreamingEnabled)
         {
-            var hmdPosition = hmdSource.position;
-            var hmdRotation = hmdSource.rotation;
-            payload.hmdAvailable = true;
-            payload.hmdPx = hmdPosition.x;
-            payload.hmdPy = hmdPosition.y;
-            payload.hmdPz = hmdPosition.z;
-            payload.hmdRx = hmdRotation.x;
-            payload.hmdRy = hmdRotation.y;
-            payload.hmdRz = hmdRotation.z;
-            payload.hmdRw = hmdRotation.w;
+            var hmdSource = poseSource;
+            if (hmdSource == null && Camera.main != null)
+            {
+                hmdSource = Camera.main.transform;
+            }
+
+            if (hmdSource != null)
+            {
+                var hmdPosition = hmdSource.position;
+                var hmdRotation = hmdSource.rotation;
+                payload.hmdAvailable = true;
+                payload.hmdPx = hmdPosition.x;
+                payload.hmdPy = hmdPosition.y;
+                payload.hmdPz = hmdPosition.z;
+                payload.hmdRx = hmdRotation.x;
+                payload.hmdRy = hmdRotation.y;
+                payload.hmdRz = hmdRotation.z;
+                payload.hmdRw = hmdRotation.w;
+            }
         }
 
         if (sendJoystickWristPose &&
