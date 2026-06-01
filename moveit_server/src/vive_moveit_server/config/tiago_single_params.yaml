@@ -11,6 +11,7 @@ vive_moveit_server:
     head_extra_output_topics:
       - /vive/robot_head_pose
     hand_target_topic: /vive/hand_target_pose
+    current_wrist_pose_topic: /vive/current_wrist_pose
     move_group_action_name: /move_action
 
     # "ik_topic" uses MoveIt's seeded IK service for small 6-DoF joystick
@@ -29,6 +30,8 @@ vive_moveit_server:
     # The server treats incoming hand target coordinates as this robot frame.
     # Adjust calibration/offsets below if your Unity frame is not already aligned.
     pose_reference_frame: base_footprint
+    current_wrist_reference_frame: base_footprint
+    current_wrist_pose_publish_rate_hz: 10.0
 
     planning_time_sec: 0.15
     max_velocity_scaling_factor: 0.25

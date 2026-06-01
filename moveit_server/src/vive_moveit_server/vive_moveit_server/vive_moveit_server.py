@@ -8,6 +8,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.task import Future
+from rclpy.time import Time
 
 from geometry_msgs.msg import Pose, PoseStamped, Quaternion
 from moveit_msgs.action import MoveGroup
@@ -24,6 +25,7 @@ from moveit_msgs.msg import (
 from moveit_msgs.srv import GetPositionIK
 from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
+from tf2_ros import Buffer, TransformException, TransformListener
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 
@@ -144,6 +146,10 @@ class ViveMoveItServer(Node):
             "hand_target_topic",
             "/vive/hand_target_pose",
         ).value
+        current_wrist_pose_topic = self.declare_parameter(
+            "current_wrist_pose_topic",
+            "/vive/current_wrist_pose",
+        ).value
         arm_command_topic = self.declare_parameter(
             "arm_command_topic",
             "/arm_controller/command",
@@ -152,6 +158,8 @@ class ViveMoveItServer(Node):
             "torso_command_topic",
             "/torso_controller/command",
         ).value
+        self.arm_command_topic = str(arm_command_topic)
+        self.torso_command_topic = str(torso_command_topic)
         joint_state_topic = self.declare_parameter(
             "joint_state_topic",
             "/joint_states",
@@ -173,6 +181,13 @@ class ViveMoveItServer(Node):
             "pose_reference_frame",
             "base_footprint",
         ).value
+        self.current_wrist_reference_frame = self.declare_parameter(
+            "current_wrist_reference_frame",
+            "",
+        ).value
+        self.current_wrist_pose_publish_rate_hz = float(
+            self.declare_parameter("current_wrist_pose_publish_rate_hz", 10.0).value
+        )
         self.planning_time_sec = float(
             self.declare_parameter("planning_time_sec", 0.35).value
         )
@@ -311,6 +326,11 @@ class ViveMoveItServer(Node):
             self.create_publisher(PoseStamped, topic, 10)
             for topic in self.head_output_topics
         ]
+        self.current_wrist_pose_publisher = self.create_publisher(
+            PoseStamped,
+            current_wrist_pose_topic,
+            10,
+        )
         self.trajectory_publisher = self.create_publisher(
             JointTrajectory,
             arm_command_topic,
@@ -329,6 +349,8 @@ class ViveMoveItServer(Node):
             self.move_group_action_name,
         )
         self.ik_client = self.create_client(GetPositionIK, self.ik_service_name)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.create_subscription(
             PoseStamped,
@@ -349,6 +371,11 @@ class ViveMoveItServer(Node):
             10,
         )
         self.create_timer(0.02, self._maybe_send_latest_target)
+        if self.current_wrist_pose_publish_rate_hz > 0.0:
+            self.create_timer(
+                1.0 / self.current_wrist_pose_publish_rate_hz,
+                self._publish_current_wrist_pose,
+            )
 
         self.get_logger().info(
             f"Listening for head poses on '{head_input_topic}' and hand targets "
@@ -361,6 +388,10 @@ class ViveMoveItServer(Node):
             f"MoveIt action '{self.move_group_action_name}', group "
             f"'{self.arm_group}', end effector '{self.end_effector_link}', "
             f"mode '{self.execution_mode}'"
+        )
+        self.get_logger().info(
+            f"Publishing current wrist pose on '{current_wrist_pose_topic}' in "
+            f"frame '{self._current_wrist_reference_frame()}'"
         )
         if self.execution_mode == "trajectory_topic":
             self.get_logger().info(
@@ -406,6 +437,38 @@ class ViveMoveItServer(Node):
 
         for name, position in zip(message.name, message.position):
             self.current_joint_positions[name] = float(position)
+
+    def _current_wrist_reference_frame(self) -> str:
+        return (
+            str(self.current_wrist_reference_frame).strip()
+            or str(self.pose_reference_frame).strip()
+            or "base_footprint"
+        )
+
+    def _publish_current_wrist_pose(self) -> None:
+        reference_frame = self._current_wrist_reference_frame()
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                reference_frame,
+                self.end_effector_link,
+                Time(),
+            )
+        except TransformException as error:
+            self._warn_throttled(
+                "current_wrist_tf_wait",
+                "Waiting for current wrist transform "
+                f"{reference_frame} -> {self.end_effector_link}: {error}",
+                5.0,
+            )
+            return
+
+        message = PoseStamped()
+        message.header = transform.header
+        message.pose.position.x = transform.transform.translation.x
+        message.pose.position.y = transform.transform.translation.y
+        message.pose.position.z = transform.transform.translation.z
+        message.pose.orientation = transform.transform.rotation
+        self.current_wrist_pose_publisher.publish(message)
 
     def _maybe_send_latest_target(self) -> None:
         if self.goal_in_flight or self.pending_hand_target is None:
@@ -784,6 +847,7 @@ class ViveMoveItServer(Node):
             solution_positions,
             self.arm_joint_names,
             self.trajectory_publisher,
+            self.arm_command_topic,
         ):
             published = True
 
@@ -792,6 +856,7 @@ class ViveMoveItServer(Node):
                 solution_positions,
                 self.torso_joint_names,
                 self.torso_trajectory_publisher,
+                self.torso_command_topic,
             ):
                 published = True
 
@@ -802,6 +867,7 @@ class ViveMoveItServer(Node):
         solution_positions: Dict[str, float],
         joint_names: list[str],
         publisher,
+        topic_name: str,
     ) -> bool:
         selected_joint_names = [
             joint_name for joint_name in joint_names if joint_name in solution_positions
@@ -834,28 +900,52 @@ class ViveMoveItServer(Node):
         alpha = max(0.0, min(1.0, self.joint_smoothing_alpha)) * motion_scale
         max_joint_delta_rad = self.max_joint_delta_rad * motion_scale
         point = JointTrajectoryPoint()
+        max_ik_delta = 0.0
+        max_command_delta = 0.0
         for joint_name in selected_joint_names:
             start = start_positions[joint_name]
             desired = solution_positions[joint_name]
-            delta = (desired - start) * alpha
+            ik_delta = desired - start
+            delta = ik_delta * alpha
             if max_joint_delta_rad > 0.0:
                 delta = max(
                     -max_joint_delta_rad,
                     min(max_joint_delta_rad, delta),
                 )
             command = start + delta
+            max_ik_delta = max(max_ik_delta, abs(ik_delta))
+            max_command_delta = max(max_command_delta, abs(delta))
             point.positions.append(command)
             self.last_commanded_joint_positions[joint_name] = command
+
+        if max_command_delta < 1e-5:
+            self._info_throttled(
+                f"joint_command_noop_{topic_name}",
+                f"Skipping no-op JointTrajectory to '{topic_name}' "
+                f"max_ik_delta={max_ik_delta:.6f}rad",
+                1.0,
+            )
+            return False
 
         point.time_from_start = Duration(
             seconds=max(0.02, self.command_duration_sec)
         ).to_msg()
 
         trajectory = JointTrajectory()
-        trajectory.header.stamp = self.get_clock().now().to_msg()
+        # A zero stamp lets the ROS1 controller start the trajectory on receipt.
+        # Stamping with ROS2 "now" can arrive through ros1_bridge already stale.
         trajectory.joint_names = selected_joint_names
         trajectory.points = [point]
         publisher.publish(trajectory)
+        self._info_throttled(
+            f"joint_command_{topic_name}",
+            f"Published JointTrajectory to '{topic_name}' "
+            f"joints={len(selected_joint_names)} "
+            f"max_ik_delta={max_ik_delta:.4f}rad "
+            f"max_command_delta={max_command_delta:.4f}rad "
+            f"time_from_start={self.command_duration_sec:.3f}s",
+            1.0,
+        )
         return True
 
     def _on_goal_response(

@@ -11,6 +11,7 @@ WORKDIR /moveit_ws
 
 RUN apt-get update && apt-get install -y \
     ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-tf2-ros \
     ros-humble-moveit \
     ros-humble-tiago-moveit-config \
     ros-humble-pick-ik \

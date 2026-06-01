@@ -1,6 +1,6 @@
 from setuptools import setup
 
-package_name = "image_listener"
+package_name = "webrtc_teleop"
 
 setup(
     name=package_name,
@@ -14,12 +14,12 @@ setup(
     zip_safe=True,
     maintainer="you",
     maintainer_email="mateuszwatly@gmail.com",
-    description="Image subscriber node",
+    description="WebRTC video and teleop input bridge",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
-            "image_subscriber = image_listener.image_subscriber:main",
-            "teleop_webrtc = image_listener.teleop_webrtc:main",
+            "image_subscriber = webrtc_teleop.image_subscriber:main",
+            "teleop_webrtc = webrtc_teleop.teleop_webrtc:main",
         ],
     },
 )

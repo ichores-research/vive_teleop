@@ -23,15 +23,15 @@ services:
       - ROS_MASTER_URI=http://10.68.0.1:11311
       - ROS_IP=10.68.0.131
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-  ros2_app:
+  webrtc_server:
     build:
-      context: ./ros2_app
+      context: ./webrtc_server
       network: host
 
-    container_name: ros2_app
+    container_name: webrtc_server
 
     volumes:
-      - ./ros2_app/src/image_listener:/ros2_ws/src/image_listener
+      - ./webrtc_server/src/webrtc_teleop:/ros2_ws/src/webrtc_teleop
 
     working_dir: /ros2_ws
 
@@ -55,7 +55,7 @@ services:
         source /opt/ros/humble/setup.bash &&
         source install/setup.bash &&
         /wait-for-bridge.sh &&
-        ros2 run image_listener image_subscriber
+        ros2 run webrtc_teleop teleop_webrtc
       "
 
   moveit_server:
@@ -67,10 +67,10 @@ services:
 
     depends_on:
       - ros1_bridge
-      - ros2_app
+      - webrtc_server
 
     volumes:
-      - ./ros2_app/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
+      - ./webrtc_server/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
 
     working_dir: /moveit_ws
 

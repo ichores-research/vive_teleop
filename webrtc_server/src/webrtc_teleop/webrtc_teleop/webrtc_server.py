@@ -100,6 +100,7 @@ def _candidate_summary(sdp: str | None) -> str:
 
 PeerSetupCallback = Callable[[RTCPeerConnection, dict[str, Any]], Any]
 MessageCallback = Callable[[str | bytes], Any]
+JsonPayloadCallback = Callable[[], dict[str, Any]]
 
 
 class WebRTCServer:
@@ -164,6 +165,13 @@ class WebRTCServer:
                         asyncio.create_task(result)
 
         self.add_offer_route(path, setup_input_peer)
+
+    def add_json_get_route(self, path: str, get_payload: JsonPayloadCallback) -> None:
+        route = self._app.router.add_get(
+            path,
+            lambda request: self._handle_json_get(request, get_payload),
+        )
+        self._cors.add(route)
 
     def add_offer_route(self, path: str, setup_peer: PeerSetupCallback) -> None:
         route = self._app.router.add_post(
@@ -248,6 +256,19 @@ class WebRTCServer:
             self._pcs.discard(pc)
             raise
 
+    async def _handle_json_get(
+        self,
+        _request: web.Request,
+        get_payload: JsonPayloadCallback,
+    ) -> web.Response:
+        payload = get_payload()
+        if inspect.isawaitable(payload):
+            payload = await payload
+        if not isinstance(payload, dict):
+            raise web.HTTPInternalServerError(text="JSON route returned no object")
+
+        return web.json_response(payload)
+
     async def _handle_config(self, request: web.Request) -> web.Response:
         public_host = os.environ.get("WEBRTC_PUBLIC_HOST")
         if not public_host:
@@ -262,6 +283,7 @@ class WebRTCServer:
                 "serverUrl": server_url,
                 "offerUrl": f"{server_url}/offer",
                 "inputOfferUrl": f"{server_url}/input_offer",
+                "currentWristPoseUrl": f"{server_url}/current_wrist_pose",
                 "iceServers": [_ice_server_dict(public_turn_urls)]
                 if public_turn_urls
                 else [],

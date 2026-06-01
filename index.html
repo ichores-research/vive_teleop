@@ -515,12 +515,14 @@
             joystickAxisY: document.getElementById('joystickAxisY'),
         };
         const INPUT_STREAM_INTERVAL_MS = 100;
+        const CURRENT_WRIST_FETCH_TIMEOUT_MS = 1000;
 
         let videoPc = null;
         let inputPc = null;
         let inputChannel = null;
         let inputStreamTimer = null;
         let inputStreamState = null;
+        let pendingInputStreamState = null;
 
         const params = new URLSearchParams(window.location.search);
         const serverParamProvided = params.has('server');
@@ -614,11 +616,112 @@
                     `Cannot fetch ${target}.`,
                     'Try Host :8088 first for the README flow.',
                     'Use 10.68.0.132 only when this browser can route to the ipvlan container.',
-                    'Also check that ros2_app is running and CORS errors are not shown in the browser console.',
+                    'Also check that webrtc_server is running and CORS errors are not shown in the browser console.',
                 ].join(' ');
             }
 
             return error.message;
+        }
+
+        function hasField(object, field) {
+            return object && Object.prototype.hasOwnProperty.call(object, field);
+        }
+
+        function formatPoseNumber(value) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) {
+                return null;
+            }
+            return number.toFixed(6).replace(/\.?0+$/, '');
+        }
+
+        function setInputNumber(id, value) {
+            const formatted = formatPoseNumber(value);
+            if (formatted !== null && inputControls[id]) {
+                inputControls[id].value = formatted;
+            }
+        }
+
+        function setInputText(id, value) {
+            if (typeof value === 'string' && value.trim() && inputControls[id]) {
+                inputControls[id].value = value;
+            }
+        }
+
+        function applyCurrentWristPose(payload) {
+            if (!payload || !payload.available) {
+                return false;
+            }
+
+            const frame = payload.wristFrame || payload.robotWristFrame || payload.frame;
+            setInputText('wristFrame', frame);
+            setInputText('robotWristFrame', payload.robotWristFrame || frame);
+
+            for (const id of [
+                'wristPx',
+                'wristPy',
+                'wristPz',
+                'wristRx',
+                'wristRy',
+                'wristRz',
+                'wristRw',
+                'robotWristRx',
+                'robotWristRy',
+                'robotWristRz',
+                'robotWristRw',
+            ]) {
+                if (hasField(payload, id)) {
+                    setInputNumber(id, payload[id]);
+                }
+            }
+
+            return true;
+        }
+
+        async function fetchJsonWithTimeout(path, timeoutMs) {
+            const controller = new AbortController();
+            const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch(endpoint(path), {
+                    signal: controller.signal,
+                });
+                if (!response.ok) {
+                    const body = await response.text();
+                    throw new Error(`${path} HTTP ${response.status}${body ? `: ${body}` : ''}`);
+                }
+                return await response.json();
+            } finally {
+                window.clearTimeout(timeout);
+            }
+        }
+
+        async function refreshCurrentWristPose() {
+            await configLoadPromise;
+            try {
+                const payload = await fetchJsonWithTimeout(
+                    '/current_wrist_pose',
+                    CURRENT_WRIST_FETCH_TIMEOUT_MS,
+                );
+                if (!payload.available) {
+                    log(`Current wrist pose unavailable: ${payload.message || 'no sample yet'}`);
+                    return false;
+                }
+                if (!applyCurrentWristPose(payload)) {
+                    log('Current wrist pose response had no usable pose; using displayed wrist fields');
+                    return false;
+                }
+
+                const frame = payload.frame || controlValue('robotWristFrame');
+                log(`Loaded current wrist pose from ${frame}`);
+                return true;
+            } catch (error) {
+                log(
+                    `Could not load current wrist pose: ${
+                        describeFetchError(error, '/current_wrist_pose')
+                    }. Using displayed wrist fields.`,
+                );
+                return false;
+            }
         }
 
         function peerConfig() {
@@ -787,6 +890,16 @@
         }
 
         async function connectInput() {
+            if (inputPc) {
+                return;
+            }
+
+            connectInputBtn.disabled = true;
+            setStatus(inputStatusEl, 'Input: wrist pose', 'warn');
+            await refreshCurrentWristPose();
+            pendingInputStreamState = captureInputState();
+            renderInputState(pendingInputStreamState);
+
             inputPc = new RTCPeerConnection(peerConfig());
             attachStateLogging(inputPc, 'Input', inputStatusEl);
             inputChannel = inputPc.createDataChannel('input');
@@ -796,7 +909,7 @@
             inputChannel.addEventListener('open', () => {
                 setStatus(inputStatusEl, 'Input: open', 'ok');
                 log('Input data channel open');
-                startInputStream();
+                startInputStream(pendingInputStreamState);
                 updateButtons();
             });
 
@@ -905,10 +1018,11 @@
             };
         }
 
-        function startInputStream() {
+        function startInputStream(initialState = null) {
             stopInputStream();
-            inputStreamState = captureInputState();
+            inputStreamState = initialState ? { ...initialState } : captureInputState();
             renderInputState(inputStreamState);
+            pendingInputStreamState = null;
 
             const sendCurrentState = () => {
                 sendPayloadObject(buildCombinedPayload(inputStreamState), { quiet: true });
@@ -971,6 +1085,7 @@
             }
             inputChannel = null;
             inputPc = null;
+            pendingInputStreamState = null;
             setStatus(inputStatusEl, 'Input: idle');
         }
 

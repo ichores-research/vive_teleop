@@ -71,4 +71,4 @@ sysinfo.txt
 
 unity-vr-headset/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
 
-ros2_app/src/image_listener/image_listener/__pycache__
+webrtc_server/src/webrtc_teleop/webrtc_teleop/__pycache__

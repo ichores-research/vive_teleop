@@ -60,7 +60,7 @@ EOF
 
 printf 'Using WebRTC host IP: %s\n' "$WEBRTC_HOST_IP"
 printf 'Using field host IP for ROS1 robot access: %s\n' "$ROS_FIELD_HOST_IP"
-printf 'Using DDS interface for local ROS2 bridge/app discovery: %s\n' "$ROS2_DDS_INTERFACE"
+printf 'Using DDS interface for local ROS2 bridge/server discovery: %s\n' "$ROS2_DDS_INTERFACE"
 printf 'CycloneDDS config: %s\n' "$CYCLONEDDS_HOST_CONFIG"
 printf 'Signaling URL: http://%s:8088\n' "$WEBRTC_HOST_IP"
 printf 'Client config URL: http://%s:8088/config\n' "$WEBRTC_HOST_IP"
@@ -69,7 +69,7 @@ printf 'Server TURN URLs: %s\n' "$WEBRTC_TURN_URLS"
 
 cd "$repo_dir"
 docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
-  ros1_bridge ros2_app moveit_server coturn >/dev/null 2>&1 || true
+  ros1_bridge webrtc_server moveit_server coturn >/dev/null 2>&1 || true
 
 exec docker compose -f docker-compose.yml -f docker-compose.wifi.yml up --build "$@" \
-  ros1_bridge_wifi ros2_app_wifi moveit_server_wifi coturn_wifi
+  ros1_bridge_wifi webrtc_server_wifi moveit_server_wifi coturn_wifi

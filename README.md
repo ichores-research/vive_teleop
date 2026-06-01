@@ -9,18 +9,19 @@ The Unity VR client is still the intended headset frontend, but `index.html` can
 The current system has five main pieces:
 
 - `ros1_bridge`: ROS1 Noetic to ROS2 Foxy dynamic bridge. It connects to the robot ROS master and exposes ROS1 topics into ROS2.
-- `ros2_app`: ROS2 Humble application. It waits for `/xtion/rgb/image_raw`, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
+- `webrtc_server`: ROS2 Humble WebRTC server. It waits for `/xtion/rgb/image_raw`, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
 - `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, forwards solved head pose commands, and uses seeded MoveIt IK for small joystick-style wrist updates.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
 
 The WebRTC server code is separated from ROS subscriber/publisher logic:
 
-- `image_listener/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
-- `image_listener/image_subscriber.py`: ROS2 image subscriber for `/xtion/rgb/image_raw`.
-- `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
-- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose` and `/vive/hand_target_pose`.
-- `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
+- `webrtc_teleop/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
+- `webrtc_teleop/image_subscriber.py`: ROS2 image subscriber for `/xtion/rgb/image_raw`.
+- `webrtc_teleop/video_track.py`: aiortc video track backed by the latest ROS image frame.
+- `webrtc_teleop/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose` and `/vive/hand_target_pose`.
+- `webrtc_teleop/current_wrist_pose.py`: ROS2 subscriber that caches the latest robot wrist pose for browser debugging.
+- `webrtc_teleop/teleop_webrtc.py`: composition entry point that wires the ROS nodes to the WebRTC server.
 
 See [architecture.puml](architecture.puml) for the PlantUML source. Regenerate [architecture.png](architecture.png) from it when a rendered diagram is needed.
 
@@ -30,17 +31,17 @@ Runtime containers use the `field_net` ipvlan network:
 
 - Robot / ROS master: `10.68.0.1`
 - `ros1_bridge`: `10.68.0.131`
-- `ros2_app`: `10.68.0.132`
+- `webrtc_server`: `10.68.0.132`
 - `coturn`: `10.68.0.133`
 - `moveit_server`: `10.68.0.134`
 
-`ros2_app` publishes `8088:8088`, but direct host access can still depend on the ipvlan host-interface setup. If the browser cannot reach `http://localhost:8088`, create the host ipvlan interface shown at the bottom of `docker-compose.yml` and try direct container access at `http://10.68.0.132:8088`.
+`webrtc_server` publishes `8088:8088`, but direct host access can still depend on the ipvlan host-interface setup. If the browser cannot reach `http://localhost:8088`, create the host ipvlan interface shown at the bottom of `docker-compose.yml` and try direct container access at `http://10.68.0.132:8088`.
 
 Both Docker builds use `network: host` so package installs do not depend on Docker's default build bridge network.
 
 ## WebRTC API
 
-`ros2_app` listens on `0.0.0.0:8088`.
+`webrtc_server` listens on `0.0.0.0:8088`.
 
 ### `POST /offer`
 
@@ -59,21 +60,26 @@ Accepts a WebRTC offer for an input data channel and returns an answer.
 
 String payloads are parsed as JSON. Binary payloads are decoded as UTF-8 before parsing.
 
-The browser debug client snapshots the displayed input values when the input data channel opens, then streams a `unity_teleop_pose` payload at 10 Hz. Use the number-input arrows to make small changes while the stream continues.
+The browser debug client requests `/current_wrist_pose` when `Input` is clicked, copies the robot wrist pose into the wrist fields when available, then streams that `unity_teleop_pose` payload at 10 Hz once the input data channel opens. Use the number-input arrows to make small changes while the stream continues.
 
-When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages:
+When a payload includes pose fields, `webrtc_server` publishes standard ROS2 messages:
 
 - `/vive/head_pose`: `geometry_msgs/PoseStamped` copied from the HMD pose.
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped` using the joystick wrist position and calibrated `robotWristR*` orientation.
 
+### `GET /current_wrist_pose`
+
+Returns the latest `/vive/current_wrist_pose` sample cached by `webrtc_server`. The browser debug client uses this endpoint to initialize its wrist target from the real robot pose before connecting to `/input_offer`. If no sample has arrived yet, the response has `available: false` and the debug client keeps the displayed wrist fields.
+
 ## MoveIt server
 
-The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app`, so it receives the WebRTC topics directly on the ROS2 side of the bridge. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, starts `robot_state_publisher`, and then starts the teleop node.
+The separate `moveit_server` container joins the same CycloneDDS graph as `webrtc_server`, so it receives the WebRTC topics directly on the ROS2 side of the bridge. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, starts `robot_state_publisher`, and then starts the teleop node.
 
 Default behavior:
 
 - Subscribes to `/vive/head_pose` and republishes the message unchanged to `/look_cmd_vel_ps`, with a debug copy on `/vive/robot_head_pose`. Point `head_output_topic` at the correct robot-side solved-head command topic if your robot uses another bridged `PoseStamped` topic.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
+- Publishes the current `end_effector_link` pose on `/vive/current_wrist_pose`, using `pose_reference_frame` by default.
 - Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for every 10 Hz input update.
 - Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
 - Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
@@ -87,6 +93,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `arm_group`: currently `arm` to force no torso. `arm_torso` allows torso motion if you deliberately want it.
 - `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
+- `current_wrist_pose_topic` and `current_wrist_reference_frame`: default to `/vive/current_wrist_pose` and `base_footprint` for initializing the debug client.
 - `ik_service_name`: defaults to `/compute_ik`.
 - `joint_state_topic`: defaults to `/joint_states`.
 - `arm_command_topic`: trajectory topic bridged to the ROS1 arm controller.
@@ -114,7 +121,7 @@ Start the containers:
 sudo docker compose up --build
 ```
 
-This starts `ros1_bridge`, `ros2_app`, `moveit_server`, and `coturn`. The MoveIt container needs a TIAGo MoveIt/robot description configuration available on the ROS2 graph before arm planning can succeed.
+This starts `ros1_bridge`, `webrtc_server`, `moveit_server`, and `coturn`. The MoveIt container needs a TIAGo MoveIt/robot description configuration available on the ROS2 graph before arm planning can succeed.
 
 In another terminal, serve the debug client:
 
@@ -147,16 +154,16 @@ WEBRTC_NIC=wlan0 ./scripts/up-wifi-webrtc.sh
 The script detects the current Wi-Fi host IP, exports `WEBRTC_HOST_IP`, detects the field-network host IP as `ROS_FIELD_HOST_IP`, generates a matching CycloneDDS config, and starts host-network Wi-Fi variants:
 
 - `ros1_bridge_wifi` on the host network, using the static robot Ethernet interface for ROS1 robot access.
-- `ros2_app_wifi` on the host network, so WebRTC signaling and media are reachable through the host Wi-Fi IP.
-- `moveit_server_wifi` on the host network, using the same ROS2 DDS interface as the bridge/app.
+- `webrtc_server_wifi` on the host network, so WebRTC signaling and media are reachable through the host Wi-Fi IP.
+- `moveit_server_wifi` on the host network, using the same ROS2 DDS interface as the bridge/server.
 - `coturn_wifi` on the host network, listening on both the Wi-Fi IP and the field-network host IP.
-- local ROS2 bridge/app discovery over loopback by default with `ROS2_DDS_INTERFACE=lo`.
+- local ROS2 bridge/server discovery over loopback by default with `ROS2_DDS_INTERFACE=lo`.
 - client-side ICE with `WEBRTC_PUBLIC_TURN_URLS=turn:<wifi-host-ip>:3478?...`.
-- server-side ICE with `WEBRTC_TURN_URLS=turn:127.0.0.1:3478?...` inside the host-network ROS2 app.
+- server-side ICE with `WEBRTC_TURN_URLS=turn:127.0.0.1:3478?...` inside the host-network WebRTC server.
 
 This avoids passing WebRTC media through Docker port publishing; Unity and browser clients talk directly to the host Wi-Fi IP.
 
-If another ROS2 node outside this host must discover the Wi-Fi bridge/app, override the DDS interface with the host's field-network IP:
+If another ROS2 node outside this host must discover the Wi-Fi bridge/server, override the DDS interface with the host's field-network IP:
 
 ```bash
 ROS2_DDS_INTERFACE=10.68.0.130 ./scripts/up-wifi-webrtc.sh
@@ -180,12 +187,12 @@ It returns the signaling URLs and client-facing ICE server list.
 
 For browser debugging:
 
-1. Wait for `ros2_app_wifi` logs to show `======== Running on http://0.0.0.0:8088 ========`.
+1. Wait for `webrtc_server_wifi` logs to show `======== Running on http://0.0.0.0:8088 ========`.
 2. Check that `ros1_bridge_wifi` logs do not show ROS master connection errors.
 3. If the debug page is served by this host, try `Host :8088` first.
 4. If the debug page is served from another PC, set `Server` to `http://<host-ip>:8088` manually.
 5. Click `Start Video` to connect to `/offer`.
-6. Click `Input` to connect to `/input_offer`; the page streams the current input state at 10 Hz. Use the number-input arrows to adjust pose values.
+6. Click `Input` to load the current robot wrist pose and connect to `/input_offer`; the page streams that state at 10 Hz. Use the number-input arrows to adjust pose values.
 
 For Unity:
 
@@ -220,7 +227,7 @@ If the browser shows a fetch/network error for `/offer` or `/input_offer`, WebRT
 Check:
 
 ```bash
-sudo docker compose logs ros2_app
+sudo docker compose logs webrtc_server
 curl -i http://localhost:8088/offer
 curl -i http://10.68.0.132:8088/offer
 ```

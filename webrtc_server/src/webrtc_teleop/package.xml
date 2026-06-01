@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>image_listener</name>
+  <name>webrtc_teleop</name>
   <version>0.0.0</version>
-  <description>Simple image subscriber</description>
+  <description>WebRTC video and teleop input bridge</description>
 
   <maintainer email="mateuszwatly@gmail.com">you</maintainer>
   <license>Apache-2.0</license>

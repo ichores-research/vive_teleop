@@ -1,4 +1,6 @@
 @startuml
+!pragma layout smetana
+
 title vive_teleop architecture
 
 skinparam componentStyle rectangle
@@ -20,13 +22,15 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "ros1_bridge dynamic_bridge\nNoetic -> Foxy" as DynamicBridge
   }
 
-  node "ros2_app container\n10.68.0.132\nport 8088" as Ros2App {
+  node "webrtc_server container\n10.68.0.132\nport 8088" as WebRTCServerContainer {
     component "image_subscriber\nROS2 node" as ImageSubscriber
     component "LatestFrameVideoTrack" as VideoTrack
     component "WebRTCServer\naiohttp + aiortc" as WebRTCServer
     component "InputPublisher\nROS2 node" as InputPublisher
+    component "CurrentWristPoseSubscriber\nROS2 node" as CurrentWristPoseSubscriber
     queue "ROS2 topic\n/vive/head_pose" as HeadPoseTopic
     queue "ROS2 topic\n/vive/hand_target_pose" as HandTargetTopic
+    queue "ROS2 topic\n/vive/current_wrist_pose" as CurrentWristPoseTopic
   }
 
   node "moveit_server container\n10.68.0.134" as MoveItContainer {
@@ -60,10 +64,13 @@ DynamicBridge --> Ros1HeadCommand : ROS1 geometry_msgs/PoseStamped
 ImageSubscriber --> VideoTrack : latest BGR frame
 VideoTrack --> WebRTCServer : media track
 WebRTCServer --> InputPublisher : data-channel JSON messages
+WebRTCServer --> CurrentWristPoseSubscriber : latest pose JSON
 InputPublisher --> HeadPoseTopic : geometry_msgs/PoseStamped
 InputPublisher --> HandTargetTopic : geometry_msgs/PoseStamped
 HeadPoseTopic --> MoveItServer : pass-through head pose
 HandTargetTopic --> MoveItServer : wrist pose target
+MoveItServer --> CurrentWristPoseTopic : current end-effector pose
+CurrentWristPoseTopic --> CurrentWristPoseSubscriber : geometry_msgs/PoseStamped
 JointStateTopic --> MoveItServer : IK seed state
 RobotStatePublisher --> MoveGroup : robot_description + TF
 MoveGroup -- ComputeIkService : provides
@@ -73,6 +80,7 @@ MoveItServer --> ArmCommandTopic : short JointTrajectory commands\nwarmup + join
 
 StaticServer --> Browser : serves index.html
 Browser --> WebRTCServer : HTTP POST /offer\nSDP offer/answer
+Browser --> WebRTCServer : HTTP GET /current_wrist_pose\ninitialize wrist target
 Browser --> WebRTCServer : HTTP POST /input_offer\nSDP offer/answer
 Browser --> WebRTCServer : input data channel\n10 Hz unity_teleop_pose
 Browser .. TurnRelay : ICE relay candidates
@@ -82,10 +90,10 @@ Unity .. TurnRelay : ICE relay candidates
 
 note right of WebRTCServer
   Runtime entrypoint:
-  ros2 run image_listener image_subscriber
+  ros2 run webrtc_teleop teleop_webrtc
 
-  image_subscriber delegates to teleop_webrtc,
-  which wires WebRTCServer to the ROS nodes.
+  teleop_webrtc wires WebRTCServer
+  to the ROS nodes.
 end note
 
 note right of MoveItServer
