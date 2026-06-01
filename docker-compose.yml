@@ -15,7 +15,7 @@ services:
         unset ROS_DISTRO
         source /opt/ros/foxy/setup.bash
         source /bridge_ws/install/setup.bash
-        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
+        exec /usr/local/bin/filter_ros1_bridge_logs.py ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
     networks:
       field_net:
         ipv4_address: 10.68.0.131
@@ -56,6 +56,39 @@ services:
         source install/setup.bash &&
         /wait-for-bridge.sh &&
         ros2 run image_listener image_subscriber
+      "
+
+  moveit_server:
+    build:
+      context: ./moveit_server
+      network: host
+
+    container_name: moveit_server
+
+    depends_on:
+      - ros1_bridge
+      - ros2_app
+
+    volumes:
+      - ./ros2_app/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
+
+    working_dir: /moveit_ws
+
+    restart: on-failure
+
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///moveit_ws/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+      - PYTHONUNBUFFERED=1
+
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.134
+
+    command: >
+      bash -c "
+        ros2 launch vive_moveit_server vive_moveit_server.launch.py ${MOVEIT_SERVER_LAUNCH_ARGS:-}
       "
 
   coturn:

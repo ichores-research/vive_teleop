@@ -18,7 +18,7 @@ services:
         unset ROS_DISTRO
         source /opt/ros/foxy/setup.bash
         source /bridge_ws/install/setup.bash
-        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
+        exec /usr/local/bin/filter_ros1_bridge_logs.py ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
     environment:
       - ROS_MASTER_URI=http://${ROBOT_IP:-10.68.0.1}:11311
       - ROS_IP=${ROS_FIELD_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set ROS_FIELD_HOST_IP}
@@ -70,12 +70,36 @@ services:
     networks:
       web_net: {}
 
+  moveit_server_wifi:
+    build:
+      context: ./moveit_server
+      network: host
+    container_name: moveit_server_wifi
+    depends_on:
+      - ros1_bridge_wifi
+      - ros2_app_wifi
+    network_mode: host
+    volumes:
+      - ${CYCLONEDDS_HOST_CONFIG:?Run scripts/up-wifi-webrtc.sh or set CYCLONEDDS_HOST_CONFIG}:/tmp/cyclonedds.xml:ro
+    working_dir: /moveit_ws
+    restart: on-failure
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+      - PYTHONUNBUFFERED=1
+    command: >
+      bash -c "
+        ros2 launch vive_moveit_server vive_moveit_server.launch.py ${MOVEIT_SERVER_LAUNCH_ARGS:-}
+      "
+
   coturn_wifi:
     image: coturn/coturn:latest
     container_name: coturn_wifi
     restart: unless-stopped
     network_mode: host
     command:
+      - --listening-ip=127.0.0.1
       - --listening-ip=${WEBRTC_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_HOST_IP}
       - --listening-ip=${ROS_FIELD_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set ROS_FIELD_HOST_IP}
       - --relay-ip=${WEBRTC_HOST_IP:?Run scripts/up-wifi-webrtc.sh or set WEBRTC_HOST_IP}
