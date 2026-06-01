@@ -1,6 +1,6 @@
 # vive_teleop
 
-`vive_teleop` bridges robot ROS1 topics into ROS2, serves the camera over WebRTC, accepts WebRTC input, and turns wrist pose targets into TIAGo arm controller commands through MoveIt IK.
+`vive_teleop` bridges robot ROS1 topics into ROS2, serves the camera over WebRTC, accepts WebRTC input, turns HMD pose into TIAGo head controller commands, and turns wrist pose targets into TIAGo arm controller commands through MoveIt IK.
 
 The Unity VR client is still the intended headset frontend, but `index.html` can be used as a lightweight browser debug client without launching Unity or SteamVR.
 
@@ -10,7 +10,7 @@ The current system has five main pieces:
 
 - `ros1_bridge`: ROS1 Noetic to ROS2 Foxy dynamic bridge. It connects to the robot ROS master and exposes ROS1 topics into ROS2.
 - `ros2_app`: ROS2 Humble application. It waits for `/xtion/rgb/image_raw`, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
-- `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, forwards solved head pose commands, and uses seeded MoveIt IK for small joystick-style wrist updates.
+- `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, converts raw HMD orientation into head joint trajectories, and uses seeded MoveIt IK for small joystick-style wrist updates.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
 
@@ -72,7 +72,9 @@ The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_
 
 Default behavior:
 
-- Subscribes to `/vive/head_pose` and republishes the message unchanged to `/look_cmd_vel_ps`, with a debug copy on `/vive/robot_head_pose`. Point `head_output_topic` at the correct robot-side solved-head command topic if your robot uses another bridged `PoseStamped` topic.
+- Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into `head_pan_joint` and `head_tilt_joint`, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/command`.
+- Publishes head commands at a fixed 20 Hz by default, with `time_from_start` set to `0.06` seconds so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
+- Applies a `0.01` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
 - Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for every 10 Hz input update.
 - Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
@@ -86,6 +88,12 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 
 - `arm_group`: currently `arm` to force no torso. `arm_torso` allows torso motion if you deliberately want it.
 - `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
+- `head_command_topic`: trajectory topic bridged to the ROS1 head controller, default `/head_controller/command`.
+- `head_joint_names`: must be `head_pan_joint` and `head_tilt_joint` for TIAGo.
+- `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.06` seconds.
+- `head_deadband_rad`: suppresses tiny pan/tilt updates; default `0.01` rad.
+- `head_pan_limits_rad`, `head_tilt_limits_rad`, and `head_limit_scale`: clamp output to a safe fraction of the real controller limits; default scale is `0.9`.
+- `head_pan_sign` and `head_tilt_sign`: sign calibration knobs if runtime testing shows Unity yaw or pitch inverted.
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
 - `ik_service_name`: defaults to `/compute_ik`.
 - `joint_state_topic`: defaults to `/joint_states`.

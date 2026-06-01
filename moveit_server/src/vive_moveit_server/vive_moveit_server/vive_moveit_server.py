@@ -33,6 +33,12 @@ def _vector_parameter(value: object, fallback: list[float]) -> list[float]:
     return list(fallback)
 
 
+def _float_pair_parameter(value: object, fallback: list[float]) -> list[float]:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return [float(item) for item in value]
+    return list(fallback)
+
+
 def _string_list_parameter(value: object, fallback: list[str]) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value if str(item)]
@@ -77,6 +83,10 @@ def _normalize_quaternion(quaternion: Quaternion) -> bool:
     quaternion.z /= norm
     quaternion.w /= norm
     return True
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
 
 
 def _position_distance(left: PoseStamped, right: PoseStamped) -> float:
@@ -131,15 +141,21 @@ class ViveMoveItServer(Node):
             "head_input_topic",
             "/vive/head_pose",
         ).value
-        head_output_topic = self.declare_parameter(
-            "head_output_topic",
-            "/vive/robot_head_pose",
+        head_command_topic = self.declare_parameter(
+            "head_command_topic",
+            "/head_controller/command",
         ).value
-        head_extra_output_topics = _declare_string_list_parameter(
+        self.head_joint_names = _declare_string_list_parameter(
             self,
-            "head_extra_output_topics",
-            [],
+            "head_joint_names",
+            ["head_pan_joint", "head_tilt_joint"],
         )
+        if len(self.head_joint_names) != 2:
+            self.get_logger().warn(
+                "head_joint_names must contain exactly pan and tilt joints; "
+                "using TIAGo defaults"
+            )
+            self.head_joint_names = ["head_pan_joint", "head_tilt_joint"]
         hand_target_topic = self.declare_parameter(
             "hand_target_topic",
             "/vive/hand_target_pose",
@@ -242,6 +258,34 @@ class ViveMoveItServer(Node):
                 True,
             ).value
         )
+        self.head_publish_rate_hz = float(
+            self.declare_parameter("head_publish_rate_hz", 20.0).value
+        )
+        self.head_command_duration_sec = float(
+            self.declare_parameter("head_command_duration_sec", 0.06).value
+        )
+        self.head_deadband_rad = float(
+            self.declare_parameter("head_deadband_rad", 0.01).value
+        )
+        self.head_limit_scale = float(
+            self.declare_parameter("head_limit_scale", 0.9).value
+        )
+        self.head_pan_limits_rad = _float_pair_parameter(
+            self.declare_parameter(
+                "head_pan_limits_rad",
+                [-1.24, 1.24],
+            ).value,
+            [-1.24, 1.24],
+        )
+        self.head_tilt_limits_rad = _float_pair_parameter(
+            self.declare_parameter(
+                "head_tilt_limits_rad",
+                [-0.98, 0.72],
+            ).value,
+            [-0.98, 0.72],
+        )
+        self.head_pan_sign = float(self.declare_parameter("head_pan_sign", 1.0).value)
+        self.head_tilt_sign = float(self.declare_parameter("head_tilt_sign", 1.0).value)
 
         self.hand_position_scale = _vector_parameter(
             self.declare_parameter(
@@ -289,6 +333,9 @@ class ViveMoveItServer(Node):
         )
 
         self.pending_hand_target: Optional[PoseStamped] = None
+        self.latest_head_pose: Optional[PoseStamped] = None
+        self.last_head_pan: Optional[float] = None
+        self.last_head_tilt: Optional[float] = None
         self.last_commanded_target: Optional[PoseStamped] = None
         self.last_successful_ik_target: Optional[PoseStamped] = None
         self.current_joint_positions: Dict[str, float] = {}
@@ -303,14 +350,11 @@ class ViveMoveItServer(Node):
         self.received_hand_target = False
         self.received_joint_state = False
 
-        self.head_output_topics = []
-        for topic in [head_output_topic, *head_extra_output_topics]:
-            if topic and topic not in self.head_output_topics:
-                self.head_output_topics.append(topic)
-        self.head_publishers = [
-            self.create_publisher(PoseStamped, topic, 10)
-            for topic in self.head_output_topics
-        ]
+        self.head_trajectory_publisher = self.create_publisher(
+            JointTrajectory,
+            head_command_topic,
+            10,
+        )
         self.trajectory_publisher = self.create_publisher(
             JointTrajectory,
             arm_command_topic,
@@ -349,13 +393,16 @@ class ViveMoveItServer(Node):
             10,
         )
         self.create_timer(0.02, self._maybe_send_latest_target)
+        head_timer_period_sec = 1.0 / max(1.0, self.head_publish_rate_hz)
+        self.create_timer(head_timer_period_sec, self._maybe_publish_head_command)
 
         self.get_logger().info(
             f"Listening for head poses on '{head_input_topic}' and hand targets "
             f"on '{hand_target_topic}'"
         )
         self.get_logger().info(
-            f"Head poses are forwarded unchanged to '{head_output_topic}'"
+            f"Head poses publish JointTrajectory commands to '{head_command_topic}' "
+            f"at {self.head_publish_rate_hz:.1f} Hz"
         )
         self.get_logger().info(
             f"MoveIt action '{self.move_group_action_name}', group "
@@ -380,12 +427,89 @@ class ViveMoveItServer(Node):
     def _on_head_pose(self, message: PoseStamped) -> None:
         if not self.received_head_pose:
             self.get_logger().info(
-                "Received first head pose input; forwarding to "
-                + ", ".join(self.head_output_topics)
+                "Received first head pose input; buffering for fixed-rate head control"
             )
             self.received_head_pose = True
-        for publisher in self.head_publishers:
-            publisher.publish(message)
+        self.latest_head_pose = message
+
+    def _maybe_publish_head_command(self) -> None:
+        if self.latest_head_pose is None:
+            return
+
+        pan_tilt = self._head_pose_to_pan_tilt(self.latest_head_pose)
+        if pan_tilt is None:
+            return
+
+        pan, tilt = pan_tilt
+        pan = self._clamp_head_joint(pan, self.head_pan_limits_rad)
+        tilt = self._clamp_head_joint(tilt, self.head_tilt_limits_rad)
+
+        if self._inside_head_deadband(pan, tilt):
+            return
+
+        point = JointTrajectoryPoint()
+        point.positions = [pan, tilt]
+        point.time_from_start = Duration(
+            seconds=max(0.02, self.head_command_duration_sec)
+        ).to_msg()
+
+        trajectory = JointTrajectory()
+        trajectory.header.stamp = self.get_clock().now().to_msg()
+        trajectory.joint_names = list(self.head_joint_names)
+        trajectory.points = [point]
+
+        self.head_trajectory_publisher.publish(trajectory)
+        self.last_head_pan = pan
+        self.last_head_tilt = tilt
+
+    def _head_pose_to_pan_tilt(
+        self,
+        message: PoseStamped,
+    ) -> Optional[tuple[float, float]]:
+        quaternion = Quaternion()
+        quaternion.x = message.pose.orientation.x
+        quaternion.y = message.pose.orientation.y
+        quaternion.z = message.pose.orientation.z
+        quaternion.w = message.pose.orientation.w
+        if not _normalize_quaternion(quaternion):
+            self._warn_throttled(
+                "invalid_head_quaternion",
+                "Ignoring head pose with invalid orientation quaternion",
+                2.0,
+            )
+            return None
+
+        x = quaternion.x
+        y = quaternion.y
+        z = quaternion.z
+        w = quaternion.w
+
+        # Unity HMD uses left-handed Y-up coordinates. The robot head only needs
+        # yaw around Unity Y for pan and pitch around Unity X for tilt; roll is
+        # intentionally ignored.
+        pan = math.atan2(
+            2.0 * ((w * y) + (x * z)),
+            1.0 - (2.0 * ((y * y) + (x * x))),
+        )
+        tilt_value = _clamp(2.0 * ((w * x) - (z * y)), -1.0, 1.0)
+        tilt = math.asin(tilt_value)
+        return self.head_pan_sign * pan, self.head_tilt_sign * tilt
+
+    def _clamp_head_joint(self, value: float, limits: list[float]) -> float:
+        limit_scale = _clamp(self.head_limit_scale, 0.0, 1.0)
+        lower = min(limits[0], limits[1]) * limit_scale
+        upper = max(limits[0], limits[1]) * limit_scale
+        return _clamp(value, lower, upper)
+
+    def _inside_head_deadband(self, pan: float, tilt: float) -> bool:
+        if self.last_head_pan is None or self.last_head_tilt is None:
+            return False
+
+        deadband = max(0.0, self.head_deadband_rad)
+        return (
+            abs(pan - self.last_head_pan) < deadband
+            and abs(tilt - self.last_head_tilt) < deadband
+        )
 
     def _on_hand_target(self, message: PoseStamped) -> None:
         if not self.received_hand_target:

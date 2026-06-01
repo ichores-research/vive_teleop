@@ -5,11 +5,26 @@ vive_moveit_server:
     end_effector_link: arm_tool_link
 
     head_input_topic: /vive/head_pose
-    # Robot-side solved-head command topic. /vive/robot_head_pose is retained as
-    # an extra debug output below.
-    head_output_topic: /look_cmd_vel_ps
-    head_extra_output_topics:
-      - /vive/robot_head_pose
+    # Raw Unity HMD orientation is converted into direct TIAGo head trajectory
+    # commands inside vive_moveit_server.
+    head_command_topic: /head_controller/command
+    head_joint_names:
+      - head_pan_joint
+      - head_tilt_joint
+    head_publish_rate_hz: 2
+    #It tells the controller how much time it has to interpolate from its current position 
+    # to the new target angle. It should roughly match 1/publish_rate
+    head_command_duration_sec: 0.5
+    
+    # A noise filter threshold (in radians). 
+    #If the difference between the user's new head angle and the previously sent angle
+    # is smaller than this value (0.01 ~ 0.57°), the node ignores it
+    head_deadband_rad: 0.01  
+    head_limit_scale: 0.9 # 90% of joint limits
+    head_pan_limits_rad: [-1.24, 1.24]
+    head_tilt_limits_rad: [-0.98, 0.72]
+    head_pan_sign: 1.0
+    head_tilt_sign: 1.0
     hand_target_topic: /vive/hand_target_pose
     move_group_action_name: /move_action
 
@@ -25,6 +40,7 @@ vive_moveit_server:
     joint_state_topic: /joint_states
     ik_service_name: /compute_ik
     async_execution: true
+    plan_only: true
 
     # The server treats incoming hand target coordinates as this robot frame.
     # Adjust calibration/offsets below if your Unity frame is not already aligned.
