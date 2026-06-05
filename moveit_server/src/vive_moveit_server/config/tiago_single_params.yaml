@@ -7,7 +7,7 @@ vive_moveit_server:
     head_input_topic: /vive/head_pose
     # Raw Unity HMD orientation is converted into direct TIAGo head trajectory
     # commands inside vive_moveit_server.
-    head_command_topic: /head_controller/command
+    head_command_topic: /head_controller/joint_trajectory
     head_joint_names:
       - head_1_joint
       - head_2_joint
@@ -35,8 +35,8 @@ vive_moveit_server:
     # Use "moveit" only when ROS2 controller actions are available to MoveIt.
     # "plan_only" validates planning without commanding the robot.
     execution_mode: ik_topic
-    arm_command_topic: /arm_controller/command
-    torso_command_topic: /torso_controller/command
+    arm_command_topic: /arm_controller/joint_trajectory
+    torso_command_topic: /torso_controller/joint_trajectory
     joint_state_topic: /joint_states
     ik_service_name: /compute_ik
     async_execution: true

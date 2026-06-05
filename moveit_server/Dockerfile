@@ -2,7 +2,7 @@ FROM ros:humble
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ENV ROS_DOMAIN_ID=0
+ENV ROS_DOMAIN_ID=67
 ENV PYTHONUNBUFFERED=1
 
 SHELL ["/bin/bash", "-c"]

@@ -144,7 +144,7 @@ class ViveMoveItServer(Node):
         ).value
         head_command_topic = self.declare_parameter(
             "head_command_topic",
-            "/head_controller/command",
+            "/head_controller/joint_trajectory",
         ).value
         self.head_joint_names = _declare_string_list_parameter(
             self,
@@ -163,11 +163,11 @@ class ViveMoveItServer(Node):
         ).value
         arm_command_topic = self.declare_parameter(
             "arm_command_topic",
-            "/arm_controller/command",
+            "/arm_controller/joint_trajectory",
         ).value
         torso_command_topic = self.declare_parameter(
             "torso_command_topic",
-            "/torso_controller/command",
+            "/torso_controller/joint_trajectory",
         ).value
         joint_state_topic = self.declare_parameter(
             "joint_state_topic",

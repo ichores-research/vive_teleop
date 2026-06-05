@@ -21,6 +21,7 @@ export ROS_FIELD_HOST_IP="$field_host_ip"
 export ROBOT_IP="${ROBOT_IP:-10.68.0.1}"
 export ROS2_DDS_INTERFACE="${ROS2_DDS_INTERFACE:-$ROS_FIELD_HOST_IP}"
 export ROS2_DDS_ALLOW_MULTICAST="${ROS2_DDS_ALLOW_MULTICAST:-true}"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-67}"
 export TURN_USER="${TURN_USER:-dummy}"
 export TURN_PASSWORD="${TURN_PASSWORD:-dummy}"
 export WEBRTC_PUBLIC_TURN_URLS="${WEBRTC_PUBLIC_TURN_URLS:-turn:${WEBRTC_HOST_IP}:3478?transport=udp,turn:${WEBRTC_HOST_IP}:3478?transport=tcp}"
@@ -68,6 +69,7 @@ printf 'Using WebRTC host IP: %s\n' "$WEBRTC_HOST_IP"
 printf 'Using ROS2 robot IP: %s\n' "$ROBOT_IP"
 printf 'Using field host IP for ROS2 robot access: %s\n' "$ROS_FIELD_HOST_IP"
 printf 'Using DDS interface for direct robot discovery: %s\n' "$ROS2_DDS_INTERFACE"
+printf 'Using ROS2 domain ID: %s\n' "$ROS_DOMAIN_ID"
 printf 'CycloneDDS config: %s\n' "$CYCLONEDDS_HOST_CONFIG"
 printf 'Signaling URL: http://%s:8088\n' "$WEBRTC_HOST_IP"
 printf 'Client config URL: http://%s:8088/config\n' "$WEBRTC_HOST_IP"
@@ -78,5 +80,5 @@ cd "$repo_dir"
 docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
   ros2_app moveit_server coturn >/dev/null 2>&1 || true
 
-exec docker compose -f docker-compose.yml -f docker-compose.wifi.yml up --build "$@" \
+exec docker compose -f docker-compose.yml -f docker-compose.wifi.yml up --build --remove-orphans "$@" \
   ros2_app_wifi moveit_server_wifi coturn_wifi

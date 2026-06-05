@@ -11,10 +11,10 @@ actor "Unity VR headset\nunity-vr-headset" as Unity
 
 node "Robot network\n10.68.0.0/24" as Net {
   node "Robot\nROS2 graph\n10.68.0.1" as Robot {
-    component "ROS2 camera topic\n/xtion/rgb/image_raw" as RobotCamera
+    component "ROS2 camera topic\n/head_front_camera/rgb/image_raw" as RobotCamera
     component "ROS2 joint states\n/joint_states" as RobotJointStates
-    component "ROS2 arm controller\n/arm_controller/command" as RobotArmCommand
-    component "ROS2 head controller\n/head_controller/command" as RobotHeadCommand
+    component "ROS2 arm controller\n/arm_controller/joint_trajectory" as RobotArmCommand
+    component "ROS2 head controller\n/head_controller/joint_trajectory" as RobotHeadCommand
   }
 
   node "ros2_app container\n10.68.0.132\nport 8088" as Ros2App {
@@ -31,8 +31,8 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "move_group\nTIAGo MoveIt config" as MoveGroup
     component "vive_moveit_server\nPython ROS2 node\nexecution_mode=ik_topic" as MoveItServer
     queue "ROS2 topic\n/joint_states" as JointStateTopic
-    queue "ROS2 topic\n/head_controller/command" as HeadCommandTopic
-    queue "ROS2 topic\n/arm_controller/command" as ArmCommandTopic
+    queue "ROS2 topic\n/head_controller/joint_trajectory" as HeadCommandTopic
+    queue "ROS2 topic\n/arm_controller/joint_trajectory" as ArmCommandTopic
     interface "ROS2 service\n/compute_ik" as ComputeIkService
   }
 
@@ -84,11 +84,11 @@ end note
 note right of MoveItServer
   Default teleop path:
   - HMD yaw/pitch -> head pan/tilt
-  - publishes /head_controller/command
+  - publishes /head_controller/joint_trajectory
   - arm-only MoveIt group
   - torso_lift_joint locked out
   - seeded /compute_ik from /joint_states
-  - publishes /arm_controller/command
+  - publishes /arm_controller/joint_trajectory
   - retries -31 with last reachable orientation
 end note
 

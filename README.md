@@ -8,7 +8,7 @@ The Unity VR client is still the intended headset frontend, but `index.html` can
 
 The current system has four main pieces:
 
-- `ros2_app`: ROS2 Humble application. It subscribes directly to the robot's `/xtion/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
+- `ros2_app`: ROS2 Humble application. It subscribes directly to the robot's `/head_front_camera/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
 - `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, converts raw HMD orientation into head joint trajectories, and uses seeded MoveIt IK for small joystick-style wrist updates.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
@@ -16,7 +16,7 @@ The current system has four main pieces:
 The WebRTC server code is separated from ROS subscriber/publisher logic:
 
 - `image_listener/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
-- `image_listener/image_subscriber.py`: ROS2 image subscriber for `/xtion/rgb/image_raw`.
+- `image_listener/image_subscriber.py`: ROS2 image subscriber for `/head_front_camera/rgb/image_raw`.
 - `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
 - `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose` and `/vive/hand_target_pose`.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
@@ -32,7 +32,7 @@ Runtime containers use the `field_net` ipvlan network:
 - `coturn`: `10.68.0.133`
 - `moveit_server`: `10.68.0.134`
 
-The ROS2 containers use CycloneDDS on domain `0`, with the robot at `10.68.0.1` configured as a discovery peer. The existing container and robot addresses are unchanged; `10.68.0.131` is no longer used.
+The ROS2 containers use CycloneDDS on domain `67` by default, matching the robot, with `10.68.0.1` configured as a discovery peer. Override `ROS_DOMAIN_ID` if the robot configuration changes. The existing container and robot addresses are unchanged; `10.68.0.131` is no longer used.
 
 `ros2_app` publishes `8088:8088`, but direct host access can still depend on the ipvlan host-interface setup. If the browser cannot reach `http://localhost:8088`, create the host ipvlan interface shown at the bottom of `docker-compose.yml` and try direct container access at `http://10.68.0.132:8088`.
 
@@ -72,14 +72,14 @@ The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_
 
 Default behavior:
 
-- Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into TIAGo head pan/tilt joints, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/command`.
+- Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into TIAGo head pan/tilt joints, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/joint_trajectory`.
 - Publishes head commands at a fixed 20 Hz by default, with `time_from_start` set to `0.06` seconds so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
 - Applies a `0.01` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
 - Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for every 10 Hz input update.
 - Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
 - Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
-- Publishes short `trajectory_msgs/JointTrajectory` commands directly to the robot's `/arm_controller/command` topic.
+- Publishes short `trajectory_msgs/JointTrajectory` commands directly to the robot's `/arm_controller/joint_trajectory` topic.
 - Overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik` in local, one-attempt mode for small repeated joystick moves.
 - Ramps IK output after startup or a pause with `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec` so the first stationary target does not jerk at the full joint-delta limit.
 - If exact 6-DoF IK returns `NO_IK_SOLUTION` (`-31`) and a previous reachable wrist orientation exists, it retries the same position with that last reachable orientation.
@@ -88,7 +88,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 
 - `arm_group`: currently `arm` to force no torso. `arm_torso` allows torso motion if you deliberately want it.
 - `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
-- `head_command_topic`: direct ROS2 trajectory topic for the head controller, default `/head_controller/command`.
+- `head_command_topic`: direct ROS2 trajectory topic for the head controller, default `/head_controller/joint_trajectory`.
 - `head_joint_names`: must match the robot's head joints, typically `head_1_joint` and `head_2_joint` for this TIAGo.
 - `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.06` seconds.
 - `head_deadband_rad`: suppresses tiny pan/tilt updates; default `0.01` rad.
@@ -97,7 +97,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
 - `ik_service_name`: defaults to `/compute_ik`.
 - `joint_state_topic`: defaults to `/joint_states`.
-- `arm_command_topic`: direct ROS2 trajectory topic for the arm controller.
+- `arm_command_topic`: direct ROS2 trajectory topic for the arm controller, default `/arm_controller/joint_trajectory`.
 - `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before IK.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
 - `max_joint_delta_rad`, `joint_smoothing_alpha`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output.

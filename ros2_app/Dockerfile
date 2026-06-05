@@ -7,7 +7,7 @@ WORKDIR /ros2_ws
 SHELL ["/bin/bash", "-c"]
 
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ENV ROS_DOMAIN_ID=0
+ENV ROS_DOMAIN_ID=67
 ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y \
