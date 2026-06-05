@@ -11,15 +11,15 @@ vive_moveit_server:
     head_joint_names:
       - head_1_joint
       - head_2_joint
-    head_publish_rate_hz: 5.0
+    head_publish_rate_hz: 20.0
     #It tells the controller how much time it has to interpolate from its current position 
     # to the new target angle.
-    head_command_duration_sec: 0.5
+    head_command_duration_sec: 0.1
     
     # A noise filter threshold (in radians). 
     #If the difference between the user's new head angle and the previously sent angle
     # is smaller than this value (0.01 ~ 0.57°), the node ignores it
-    head_deadband_rad: 0.01  
+    head_deadband_rad: 0.002
     head_limit_scale: 0.9 # 90% of joint limits
     head_pan_limits_rad: [-1.24, 1.24]
     head_tilt_limits_rad: [-0.98, 0.72]
@@ -49,7 +49,7 @@ vive_moveit_server:
     planning_time_sec: 0.15
     max_velocity_scaling_factor: 0.25
     max_acceleration_scaling_factor: 0.25
-    min_plan_interval_sec: 0.10
+    min_plan_interval_sec: 0.05
     position_deadband_m: 0.002
     orientation_deadband_rad: 0.01
     goal_position_tolerance_m: 0.015
@@ -61,12 +61,13 @@ vive_moveit_server:
     max_hand_target_z_m: 1.6
     ik_timeout_sec: 0.03
     ik_avoid_collisions: false
-    command_duration_sec: 0.12
-    max_joint_delta_rad: 0.04
-    joint_smoothing_alpha: 0.3
-    ik_warmup_sec: 1.5
-    ik_warmup_min_scale: 0.15
-    ik_warmup_reset_after_sec: 0.5
+    command_duration_sec: 0.1
+    max_joint_delta_rad: 0.025
+    joint_smoothing_alpha: 0.4
+    joint_command_deadband_rad: 0.003
+    ik_warmup_sec: 0.75
+    ik_warmup_min_scale: 0.35
+    ik_warmup_reset_after_sec: 2.0
     ik_retry_last_orientation_on_no_solution: true
 
     hand_position_scale: [1.0, 1.0, 1.0]

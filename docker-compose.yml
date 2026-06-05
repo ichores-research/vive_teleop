@@ -45,6 +45,7 @@ services:
 
     volumes:
       - ./moveit_server/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
+      - ./moveit_server/src/vive_moveit_server:/moveit_ws/src/vive_moveit_server
 
     working_dir: /moveit_ws
 

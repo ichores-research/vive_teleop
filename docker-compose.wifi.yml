@@ -51,6 +51,7 @@ services:
     network_mode: host
     volumes:
       - ${CYCLONEDDS_HOST_CONFIG:?Run scripts/up-wifi-webrtc.sh or set CYCLONEDDS_HOST_CONFIG}:/tmp/cyclonedds.xml:ro
+      - ./moveit_server/src/vive_moveit_server:/moveit_ws/src/vive_moveit_server
     working_dir: /moveit_ws
     restart: on-failure
     environment:

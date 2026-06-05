@@ -410,6 +410,10 @@
                             <label>Y <input id="headPy" type="number" step="0.01" value="1.4"></label>
                             <label>Z <input id="headPz" type="number" step="0.01" value="0"></label>
                         </div>
+                        <div class="field-grid two">
+                            <label>Pan (rad) <input id="headPan" type="number" step="0.01" value="0"></label>
+                            <label>Tilt (rad) <input id="headTilt" type="number" step="0.01" value="0"></label>
+                        </div>
                         <div class="field-grid">
                             <label>QX <input id="headRx" type="number" step="0.01" value="0"></label>
                             <label>QY <input id="headRy" type="number" step="0.01" value="0"></label>
@@ -494,6 +498,8 @@
             headPx: document.getElementById('headPx'),
             headPy: document.getElementById('headPy'),
             headPz: document.getElementById('headPz'),
+            headPan: document.getElementById('headPan'),
+            headTilt: document.getElementById('headTilt'),
             headRx: document.getElementById('headRx'),
             headRy: document.getElementById('headRy'),
             headRz: document.getElementById('headRz'),
@@ -514,13 +520,19 @@
             joystickAxisX: document.getElementById('joystickAxisX'),
             joystickAxisY: document.getElementById('joystickAxisY'),
         };
-        const INPUT_STREAM_INTERVAL_MS = 100;
+        const INPUT_STREAM_INTERVAL_MS = 50;
+        const INPUT_POSITION_BLEND = 0.3;
+        const INPUT_ORIENTATION_BLEND = 0.25;
 
         let videoPc = null;
         let inputPc = null;
         let inputChannel = null;
         let inputStreamTimer = null;
         let inputStreamState = null;
+        let inputTargetState = null;
+        let inputConnecting = false;
+        let headPanSign = -1;
+        let headTiltSign = -1;
 
         const params = new URLSearchParams(window.location.search);
         const serverParamProvided = params.has('server');
@@ -646,7 +658,7 @@
         function updateButtons() {
             const inputOpen = inputChannel && inputChannel.readyState === 'open';
             startVideoBtn.disabled = Boolean(videoPc);
-            connectInputBtn.disabled = Boolean(inputPc);
+            connectInputBtn.disabled = Boolean(inputPc) || inputConnecting;
             disconnectBtn.disabled = !videoPc && !inputPc;
             sendHeadBtn.disabled = !inputOpen;
             sendWristBtn.disabled = !inputOpen;
@@ -678,12 +690,119 @@
         function setupInputStateSync() {
             for (const [id, element] of Object.entries(inputControls)) {
                 element.addEventListener('input', () => {
-                    if (!inputStreamState) {
+                    if (!inputTargetState) {
+                        if (id === 'headPan' || id === 'headTilt') {
+                            syncHeadQuaternionFromJoints();
+                        }
                         return;
                     }
-                    inputStreamState[id] =
+                    inputTargetState[id] =
                         element.type === 'number' ? numberValue(id) : element.value;
+                    if (id === 'headPan' || id === 'headTilt') {
+                        syncHeadQuaternionFromJoints(inputTargetState);
+                    }
                 });
+            }
+        }
+
+        function blendNumber(current, target, alpha) {
+            return current + ((target - current) * alpha);
+        }
+
+        function blendQuaternion(state, target, prefix, alpha) {
+            const keys = ['x', 'y', 'z', 'w'].map((axis) => `${prefix}${axis}`);
+            const current = keys.map((key) => Number(state[key]));
+            let desired = keys.map((key) => Number(target[key]));
+            const dot = current.reduce(
+                (sum, value, index) => sum + (value * desired[index]),
+                0,
+            );
+            if (dot < 0) {
+                desired = desired.map((value) => -value);
+            }
+
+            const blended = current.map(
+                (value, index) => blendNumber(value, desired[index], alpha),
+            );
+            const norm = Math.hypot(...blended);
+            if (norm < 1e-9) {
+                return;
+            }
+            keys.forEach((key, index) => {
+                state[key] = blended[index] / norm;
+            });
+        }
+
+        function advanceInputStreamState() {
+            if (!inputStreamState || !inputTargetState) {
+                return;
+            }
+
+            for (const id of ['headPan', 'headTilt']) {
+                inputStreamState[id] = blendNumber(
+                    Number(inputStreamState[id]),
+                    Number(inputTargetState[id]),
+                    INPUT_POSITION_BLEND,
+                );
+            }
+            syncHeadQuaternionFromJoints(inputStreamState);
+
+            for (const id of ['wristPx', 'wristPy', 'wristPz']) {
+                inputStreamState[id] = blendNumber(
+                    Number(inputStreamState[id]),
+                    Number(inputTargetState[id]),
+                    INPUT_POSITION_BLEND,
+                );
+            }
+            blendQuaternion(
+                inputStreamState,
+                inputTargetState,
+                'robotWristR',
+                INPUT_ORIENTATION_BLEND,
+            );
+            blendQuaternion(
+                inputStreamState,
+                inputTargetState,
+                'wristR',
+                INPUT_ORIENTATION_BLEND,
+            );
+
+            for (const id of ['joystickAxisX', 'joystickAxisY']) {
+                inputStreamState[id] = blendNumber(
+                    Number(inputStreamState[id]),
+                    Number(inputTargetState[id]),
+                    INPUT_POSITION_BLEND,
+                );
+            }
+
+            for (const id of ['headFrame', 'wristFrame', 'robotWristFrame']) {
+                inputStreamState[id] = inputTargetState[id];
+            }
+        }
+
+        function syncHeadQuaternionFromJoints(state = null) {
+            const pan = numberValue('headPan', state);
+            const tilt = numberValue('headTilt', state);
+            const inputPan = Math.abs(headPanSign) > 1e-9 ? pan / headPanSign : pan;
+            const inputTilt = Math.abs(headTiltSign) > 1e-9 ? tilt / headTiltSign : tilt;
+            const halfPan = inputPan * 0.5;
+            const halfTilt = inputTilt * 0.5;
+            const cosPan = Math.cos(halfPan);
+            const sinPan = Math.sin(halfPan);
+            const cosTilt = Math.cos(halfTilt);
+            const sinTilt = Math.sin(halfTilt);
+            const quaternion = {
+                headRx: cosPan * sinTilt,
+                headRy: sinPan * cosTilt,
+                headRz: -sinPan * sinTilt,
+                headRw: cosPan * cosTilt,
+            };
+
+            for (const [id, value] of Object.entries(quaternion)) {
+                inputControls[id].value = value;
+                if (state) {
+                    state[id] = value;
+                }
             }
         }
 
@@ -787,6 +906,22 @@
         }
 
         async function connectInput() {
+            inputConnecting = true;
+            setStatus(inputStatusEl, 'Input: reading robot', 'warn');
+            updateButtons();
+
+            try {
+                await configLoadPromise;
+                const snapshot = await loadRobotInputState();
+                renderRobotInputState(snapshot);
+            } catch (error) {
+                log(`Robot input state error: ${error.message}`);
+                setStatus(inputStatusEl, 'Input: robot state error', 'error');
+                inputConnecting = false;
+                updateButtons();
+                return;
+            }
+
             inputPc = new RTCPeerConnection(peerConfig());
             attachStateLogging(inputPc, 'Input', inputStatusEl);
             inputChannel = inputPc.createDataChannel('input');
@@ -822,8 +957,86 @@
                 setStatus(inputStatusEl, 'Input: error', 'error');
                 await closeInput();
             } finally {
+                inputConnecting = false;
                 updateButtons();
             }
+        }
+
+        async function loadRobotInputState() {
+            let lastError = null;
+
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+                try {
+                    const response = await fetch(endpoint('/robot_state'), {
+                        cache: 'no-store',
+                    });
+                    if (!response.ok) {
+                        throw new Error(`/robot_state HTTP ${response.status}`);
+                    }
+
+                    const snapshot = await response.json();
+                    if (snapshot.ready && snapshot.head && snapshot.wrist) {
+                        return snapshot;
+                    }
+
+                    const details = Array.isArray(snapshot.errors)
+                        ? snapshot.errors.join('; ')
+                        : 'Robot pose is not ready';
+                    lastError = new Error(details);
+                } catch (error) {
+                    lastError = error;
+                }
+
+                await new Promise((resolve) => window.setTimeout(resolve, 250));
+            }
+
+            throw lastError || new Error('Robot pose is not ready');
+        }
+
+        function renderRobotInputState(snapshot) {
+            const head = snapshot.head;
+            const wrist = snapshot.wrist;
+            const headOrientation = head.orientation;
+            const wristOrientation = wrist.orientation;
+            headPanSign = head.panSign;
+            headTiltSign = head.tiltSign;
+            const state = {
+                headFrame: head.frame,
+                headPx: head.position.x,
+                headPy: head.position.y,
+                headPz: head.position.z,
+                headPan: head.pan,
+                headTilt: head.tilt,
+                headRx: headOrientation.x,
+                headRy: headOrientation.y,
+                headRz: headOrientation.z,
+                headRw: headOrientation.w,
+                wristFrame: wrist.frame,
+                robotWristFrame: wrist.frame,
+                wristPx: wrist.position.x,
+                wristPy: wrist.position.y,
+                wristPz: wrist.position.z,
+                wristRx: wristOrientation.x,
+                wristRy: wristOrientation.y,
+                wristRz: wristOrientation.z,
+                wristRw: wristOrientation.w,
+                robotWristRx: wristOrientation.x,
+                robotWristRy: wristOrientation.y,
+                robotWristRz: wristOrientation.z,
+                robotWristRw: wristOrientation.w,
+                joystickAxisX: 0,
+                joystickAxisY: 0,
+            };
+
+            renderInputState(state);
+            inputStreamState = null;
+            inputTargetState = null;
+            log(
+                `Loaded robot input state: head pan=${head.pan.toFixed(4)}, ` +
+                `tilt=${head.tilt.toFixed(4)}; wrist ` +
+                `xyz=(${wrist.position.x.toFixed(4)}, ` +
+                `${wrist.position.y.toFixed(4)}, ${wrist.position.z.toFixed(4)})`
+            );
         }
 
         function sendInput(payload, options = {}) {
@@ -907,16 +1120,18 @@
 
         function startInputStream() {
             stopInputStream();
-            inputStreamState = captureInputState();
-            renderInputState(inputStreamState);
+            inputTargetState = captureInputState();
+            inputStreamState = { ...inputTargetState };
+            renderInputState(inputTargetState);
 
             const sendCurrentState = () => {
+                advanceInputStreamState();
                 sendPayloadObject(buildCombinedPayload(inputStreamState), { quiet: true });
             };
 
             sendCurrentState();
             inputStreamTimer = window.setInterval(sendCurrentState, INPUT_STREAM_INTERVAL_MS);
-            log('Input stream started at 10 Hz');
+            log('Input stream started at 20 Hz with target interpolation');
         }
 
         function stopInputStream() {
@@ -949,7 +1164,7 @@
         }
 
         function sendCombinedPayload() {
-            sendPayloadObject(buildCombinedPayload(inputStreamState || captureInputState()));
+            sendPayloadObject(buildCombinedPayload(inputTargetState || captureInputState()));
         }
 
         async function closeVideo() {
@@ -971,6 +1186,8 @@
             }
             inputChannel = null;
             inputPc = null;
+            inputStreamState = null;
+            inputTargetState = null;
             setStatus(inputStatusEl, 'Input: idle');
         }
 

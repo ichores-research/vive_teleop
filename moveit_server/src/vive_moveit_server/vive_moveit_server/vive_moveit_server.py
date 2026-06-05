@@ -244,6 +244,9 @@ class ViveMoveItServer(Node):
         self.joint_smoothing_alpha = float(
             self.declare_parameter("joint_smoothing_alpha", 0.6).value
         )
+        self.joint_command_deadband_rad = float(
+            self.declare_parameter("joint_command_deadband_rad", 0.003).value
+        )
         self.ik_warmup_sec = float(
             self.declare_parameter("ik_warmup_sec", 1.5).value
         )
@@ -845,8 +848,13 @@ class ViveMoveItServer(Node):
                 response.solution.joint_state.position,
             )
         }
+        self.last_successful_ik_target = _copy_pose_stamped(target)
+        if self._ik_solution_reached(solution_positions):
+            self.last_commanded_target = _copy_pose_stamped(target)
+            self.goal_in_flight = False
+            return
+
         if self._publish_ik_joint_command(solution_positions):
-            self.last_successful_ik_target = _copy_pose_stamped(target)
             self._info_throttled(
                 "ik_topic_success",
                 f"Published IK servo command for '{self.arm_group}'",
@@ -854,6 +862,27 @@ class ViveMoveItServer(Node):
             )
 
         self.goal_in_flight = False
+
+    def _ik_solution_reached(self, solution_positions: Dict[str, float]) -> bool:
+        deadband = max(0.0, self.joint_command_deadband_rad)
+        compared_joint_count = 0
+        for joint_name in self._active_output_joint_names():
+            if (
+                joint_name not in solution_positions
+                or joint_name not in self.current_joint_positions
+            ):
+                continue
+            compared_joint_count += 1
+            if (
+                abs(
+                    solution_positions[joint_name]
+                    - self.current_joint_positions[joint_name]
+                )
+                > deadband
+            ):
+                return False
+
+        return compared_joint_count > 0
 
     def _retry_ik_with_last_orientation(
         self,

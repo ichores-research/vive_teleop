@@ -19,6 +19,7 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/image_subscriber.py`: ROS2 image subscriber for `/head_front_camera/rgb/image_raw`.
 - `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
 - `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose` and `/vive/hand_target_pose`.
+- `image_listener/robot_state.py`: live robot head-joint and TF snapshot provider used to initialize debug input safely.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
 See [architecture.puml](architecture.puml) for the PlantUML source. Regenerate [architecture.png](architecture.png) from it when a rendered diagram is needed.
@@ -59,7 +60,11 @@ Accepts a WebRTC offer for an input data channel and returns an answer.
 
 String payloads are parsed as JSON. Binary payloads are decoded as UTF-8 before parsing.
 
-The browser debug client snapshots the displayed input values when the input data channel opens, then streams a `unity_teleop_pose` payload at 10 Hz. Use the number-input arrows to make small changes while the stream continues.
+Before opening the input data channel, the browser debug client reads `GET /robot_state`. The server takes the wrist pose from TF (`base_footprint` to `arm_tool_link`) and the head state from `/joint_states`, verifies that both are fresh, then fills the displayed controls. The input stream starts at those live values, interpolates toward edited targets, and sends a `unity_teleop_pose` payload at 20 Hz. Use the wrist XYZ and head Pan/Tilt number-input arrows to make small changes while the stream continues.
+
+### `GET /robot_state`
+
+Returns the live debug-input starting state. The response is marked `ready: false` when head joint states or either required TF transform are missing or stale; the browser will not open the input channel in that case.
 
 When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages:
 
@@ -73,10 +78,10 @@ The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_
 Default behavior:
 
 - Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into TIAGo head pan/tilt joints, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/joint_trajectory`.
-- Publishes head commands at a fixed 20 Hz by default, with `time_from_start` set to `0.06` seconds so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
+- Publishes head commands at a fixed 20 Hz, with overlapping `0.1` second trajectory points so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
 - Applies a `0.01` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
-- Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for every 10 Hz input update.
+- Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for each interpolated input update.
 - Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
 - Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
 - Publishes short `trajectory_msgs/JointTrajectory` commands directly to the robot's `/arm_controller/joint_trajectory` topic.
@@ -90,7 +95,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
 - `head_command_topic`: direct ROS2 trajectory topic for the head controller, default `/head_controller/joint_trajectory`.
 - `head_joint_names`: must match the robot's head joints, typically `head_1_joint` and `head_2_joint` for this TIAGo.
-- `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.06` seconds.
+- `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.1` seconds.
 - `head_deadband_rad`: suppresses tiny pan/tilt updates; default `0.01` rad.
 - `head_pan_limits_rad`, `head_tilt_limits_rad`, and `head_limit_scale`: clamp output to a safe fraction of the real controller limits; default scale is `0.9`.
 - `head_pan_sign` and `head_tilt_sign`: sign calibration knobs if runtime testing shows Unity yaw or pitch inverted.
@@ -100,7 +105,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `arm_command_topic`: direct ROS2 trajectory topic for the arm controller, default `/arm_controller/joint_trajectory`.
 - `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before IK.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
-- `max_joint_delta_rad`, `joint_smoothing_alpha`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output.
+- `max_joint_delta_rad`, `joint_smoothing_alpha`, `joint_command_deadband_rad`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output. The joint deadband stops repeated trajectory refreshes after the arm reaches its requested pose.
 - `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec`: startup/resume ramp tuning.
 
 `NO_IK_SOLUTION` (`-31`) does not necessarily mean the `xyz` point is visually impossible. In `ik_topic` mode MoveIt is solving the full `end_effector_link` pose for the arm-only group, including orientation, joint limits, current seed state, and the fact that torso is intentionally locked out.
@@ -193,7 +198,7 @@ For browser debugging:
 3. If the debug page is served by this host, try `Host :8088` first.
 4. If the debug page is served from another PC, set `Server` to `http://<host-ip>:8088` manually.
 5. Click `Start Video` to connect to `/offer`.
-6. Click `Input` to connect to `/input_offer`; the page streams the current input state at 10 Hz. Use the number-input arrows to adjust pose values.
+6. Click `Input`. The page first displays the current robot head and wrist values from `/robot_state`, then connects to `/input_offer` and streams smoothly from that safe starting state at 20 Hz. Use the number-input arrows to adjust pose values.
 
 For Unity:
 
