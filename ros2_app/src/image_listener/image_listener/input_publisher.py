@@ -1,12 +1,15 @@
 import json
+import math
 from typing import Any
 
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
+from std_msgs.msg import Float64
 
 
 DEFAULT_HEAD_POSE_TOPIC = "/vive/head_pose"
 DEFAULT_HAND_TARGET_TOPIC = "/vive/hand_target_pose"
+DEFAULT_GRIPPER_TARGET_TOPIC = "/vive/gripper_opening"
 
 
 class WebRtcInputPublisher(Node):
@@ -26,6 +29,11 @@ class WebRtcInputPublisher(Node):
             hand_target_topic,
             10,
         )
+        self._gripper_target_publisher = self.create_publisher(
+            Float64,
+            DEFAULT_GRIPPER_TARGET_TOPIC,
+            10,
+        )
         self._last_input_log_sec = 0.0
         self._input_log_interval_sec = 2.0
 
@@ -35,6 +43,7 @@ class WebRtcInputPublisher(Node):
         if data is not None:
             self._publish_head_pose(data)
             self._publish_hand_target(data)
+            self._publish_gripper_target(data)
         now_sec = self.get_clock().now().nanoseconds / 1e9
         if now_sec - self._last_input_log_sec >= self._input_log_interval_sec:
             preview = payload_text[:200] + ("..." if len(payload_text) > 200 else "")
@@ -91,6 +100,28 @@ class WebRtcInputPublisher(Node):
             return
 
         self._hand_target_publisher.publish(message)
+
+    def _publish_gripper_target(self, data: dict[str, Any]) -> None:
+        if not data.get("gripperAvailable"):
+            return
+
+        try:
+            opening = float(data["gripperOpening"])
+        except (KeyError, TypeError, ValueError):
+            self.get_logger().warning(
+                "Input payload had no valid gripper opening"
+            )
+            return
+
+        if not math.isfinite(opening):
+            self.get_logger().warning(
+                "Ignoring non-finite gripper opening"
+            )
+            return
+
+        message = Float64()
+        message.data = max(0.0, min(1.0, opening))
+        self._gripper_target_publisher.publish(message)
 
     def _extract_pose(
         self,

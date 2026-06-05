@@ -1,6 +1,6 @@
 # vive_teleop
 
-`vive_teleop` connects directly to the robot's ROS2 graph, serves the camera over WebRTC, accepts WebRTC input, turns HMD pose into TIAGo head controller commands, and turns wrist pose targets into TIAGo arm controller commands through MoveIt IK.
+`vive_teleop` connects directly to the robot's ROS2 graph, serves the camera over WebRTC, accepts WebRTC input, turns HMD pose into TIAGo head controller commands, turns wrist pose targets into TIAGo arm controller commands through MoveIt IK, and controls the two-finger gripper.
 
 The Unity VR client is still the intended headset frontend, but `index.html` can be used as a lightweight browser debug client without launching Unity or SteamVR.
 
@@ -9,7 +9,7 @@ The Unity VR client is still the intended headset frontend, but `index.html` can
 The current system has four main pieces:
 
 - `ros2_app`: ROS2 Humble application. It subscribes directly to the robot's `/head_front_camera/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
-- `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, converts raw HMD orientation into head joint trajectories, and uses seeded MoveIt IK for small joystick-style wrist updates.
+- `moveit_server`: ROS2 teleoperation node. It converts raw HMD orientation into head trajectories, uses seeded MoveIt IK for wrist updates, and publishes direct two-finger gripper trajectories.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
 
@@ -18,8 +18,8 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
 - `image_listener/image_subscriber.py`: ROS2 image subscriber for `/head_front_camera/rgb/image_raw`.
 - `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
-- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose` and `/vive/hand_target_pose`.
-- `image_listener/robot_state.py`: live robot head-joint and TF snapshot provider used to initialize debug input safely.
+- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose`, `/vive/hand_target_pose`, and `/vive/gripper_opening`.
+- `image_listener/robot_state.py`: live robot head, wrist, and gripper snapshot provider used to initialize debug input safely.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
 See [architecture.puml](architecture.puml) for the PlantUML source. Regenerate [architecture.png](architecture.png) from it when a rendered diagram is needed.
@@ -60,16 +60,44 @@ Accepts a WebRTC offer for an input data channel and returns an answer.
 
 String payloads are parsed as JSON. Binary payloads are decoded as UTF-8 before parsing.
 
-Before opening the input data channel, the browser debug client reads `GET /robot_state`. The server takes the wrist pose from TF (`base_footprint` to `arm_tool_link`) and the head state from `/joint_states`, verifies that both are fresh, then fills the displayed controls. The input stream starts at those live values, interpolates toward edited targets, and sends a `unity_teleop_pose` payload at 20 Hz. Use the wrist XYZ and head Pan/Tilt number-input arrows to make small changes while the stream continues.
+Before opening the input data channel, the browser debug client reads `GET /robot_state`. The server takes the wrist pose from TF (`base_footprint` to `arm_tool_link`) and the head and gripper state from `/joint_states`, verifies that they are fresh, then fills the displayed controls. The input stream starts at those live values, interpolates toward edited targets, and sends a `unity_teleop_pose` payload at 20 Hz. Use the wrist XYZ, head Pan/Tilt, and normalized gripper opening controls to make small changes while the stream continues.
+
+Gripper fields in the JSON payload are:
+
+```json
+{
+  "gripperAvailable": true,
+  "gripperOpening": 0.5
+}
+```
+
+`gripperOpening` is normalized and clamped by the ROS bridge: `0.0` is closed and `1.0` is fully open. Clients that do not intend to command the gripper must omit these fields or set `gripperAvailable` to `false`.
 
 ### `GET /robot_state`
 
-Returns the live debug-input starting state. The response is marked `ready: false` when head joint states or either required TF transform are missing or stale; the browser will not open the input channel in that case.
+Returns the live debug-input starting state. The response is marked `ready: false` when head or gripper joint states, or either required TF transform, are missing or stale; the browser will not open the input channel in that case.
+
+The gripper portion of a ready response has this form:
+
+```json
+{
+  "gripper": {
+    "opening": 0.42,
+    "leftPosition": 0.019,
+    "rightPosition": 0.019,
+    "minPosition": 0.0,
+    "maxPosition": 0.045
+  }
+}
+```
+
+`opening` is calculated from the average measured finger position. The raw left and right positions are included for diagnosis.
 
 When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages:
 
 - `/vive/head_pose`: `geometry_msgs/PoseStamped` copied from the HMD pose.
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped` using the joystick wrist position and calibrated `robotWristR*` orientation.
+- `/vive/gripper_opening`: `std_msgs/Float64` normalized opening, where `0` is closed and `1` is fully open.
 
 ## MoveIt server
 
@@ -79,12 +107,14 @@ Default behavior:
 
 - Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into TIAGo head pan/tilt joints, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/joint_trajectory`.
 - Publishes head commands at a fixed 20 Hz, with overlapping `0.1` second trajectory points so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
-- Applies a `0.01` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
+- Applies a `0.002` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
 - Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for each interpolated input update.
 - Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
 - Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
 - Publishes short `trajectory_msgs/JointTrajectory` commands directly to the robot's `/arm_controller/joint_trajectory` topic.
+- Subscribes to normalized commands on `/vive/gripper_opening` and publishes synchronized, velocity-aware finger trajectories to `/gripper_controller/joint_trajectory`.
+- Suppresses the initial gripper command when the requested opening matches the measured robot state, then suppresses duplicate targets within the configured deadband.
 - Overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik` in local, one-attempt mode for small repeated joystick moves.
 - Ramps IK output after startup or a pause with `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec` so the first stationary target does not jerk at the full joint-delta limit.
 - If exact 6-DoF IK returns `NO_IK_SOLUTION` (`-31`) and a previous reachable wrist orientation exists, it retries the same position with that last reachable orientation.
@@ -96,19 +126,39 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `head_command_topic`: direct ROS2 trajectory topic for the head controller, default `/head_controller/joint_trajectory`.
 - `head_joint_names`: must match the robot's head joints, typically `head_1_joint` and `head_2_joint` for this TIAGo.
 - `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.1` seconds.
-- `head_deadband_rad`: suppresses tiny pan/tilt updates; default `0.01` rad.
+- `head_deadband_rad`: suppresses tiny pan/tilt updates; configured as `0.002` rad.
 - `head_pan_limits_rad`, `head_tilt_limits_rad`, and `head_limit_scale`: clamp output to a safe fraction of the real controller limits; default scale is `0.9`.
 - `head_pan_sign` and `head_tilt_sign`: sign calibration knobs if runtime testing shows Unity yaw or pitch inverted.
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
 - `ik_service_name`: defaults to `/compute_ik`.
 - `joint_state_topic`: defaults to `/joint_states`.
 - `arm_command_topic`: direct ROS2 trajectory topic for the arm controller, default `/arm_controller/joint_trajectory`.
+- `gripper_input_topic`: normalized `std_msgs/Float64` command topic, configured as `/vive/gripper_opening`.
+- `gripper_command_topic`: direct controller topic, configured as `/gripper_controller/joint_trajectory`.
+- `gripper_joint_names`: controller joint order, configured as `gripper_right_finger_joint` followed by `gripper_left_finger_joint`.
+- `gripper_min_position_m` and `gripper_max_position_m`: map normalized input onto each finger's physical range, configured as `0.0` to `0.045` m.
+- `gripper_deadband_m`: suppresses repeated targets within `0.0005` m.
+- `gripper_command_duration_sec`: minimum trajectory duration, configured as `0.15` seconds.
+- `gripper_max_velocity_mps`: extends the trajectory duration when required to keep finger motion at or below `0.04` m/s.
 - `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before IK.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
 - `max_joint_delta_rad`, `joint_smoothing_alpha`, `joint_command_deadband_rad`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output. The joint deadband stops repeated trajectory refreshes after the arm reaches its requested pose.
 - `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec`: startup/resume ramp tuning.
 
 `NO_IK_SOLUTION` (`-31`) does not necessarily mean the `xyz` point is visually impossible. In `ik_topic` mode MoveIt is solving the full `end_effector_link` pose for the arm-only group, including orientation, joint limits, current seed state, and the fact that torso is intentionally locked out.
+
+### Gripper control
+
+The browser debug client is the built-in gripper frontend:
+
+1. Reload the debug page after updating the repository so the browser has the current JavaScript.
+2. Click `Input`. The page reads both finger joints from `/robot_state` and displays their measured positions.
+3. Change `Opening`, or use `Open` and `Close`. While input is connected, the target is interpolated and streamed automatically at 20 Hz.
+4. `Send Gripper` sends the current gripper target immediately. `Send All` sends head, wrist, and gripper fields together.
+
+Connecting input does not intentionally move the gripper. The stream starts from the measured opening, and the server ignores an initial target that is already within `gripper_deadband_m` of the current finger position.
+
+The Unity client currently reports the XR controller's `joystickGrip` value, but that field is not mapped to robot gripper motion. A Unity build must send `gripperAvailable: true` and `gripperOpening` to use this command path.
 
 To disable the bundled TIAGo MoveIt launch and wait for an external MoveGroup server instead:
 
@@ -198,7 +248,8 @@ For browser debugging:
 3. If the debug page is served by this host, try `Host :8088` first.
 4. If the debug page is served from another PC, set `Server` to `http://<host-ip>:8088` manually.
 5. Click `Start Video` to connect to `/offer`.
-6. Click `Input`. The page first displays the current robot head and wrist values from `/robot_state`, then connects to `/input_offer` and streams smoothly from that safe starting state at 20 Hz. Use the number-input arrows to adjust pose values.
+6. Click `Input`. The page first displays the current robot head, wrist, and gripper values from `/robot_state`, then connects to `/input_offer` and streams smoothly from that safe starting state at 20 Hz.
+7. Adjust `Opening` between `0` and `1`, or click `Open` or `Close`. The measured left and right finger positions are read-only values captured when input connects.
 
 For Unity:
 
@@ -217,6 +268,8 @@ By default the input payload includes:
 - Right-hand XR controller / 6-DoF joystick wrist pose from `XRNode.RightHand`.
 - A calibrated relative `robotWristR*` quaternion, used in `/vive/hand_target_pose`.
 - Joystick axis, trigger, grip, and primary button values when the device exposes them through Unity XR.
+
+`joystickGrip` is telemetry only. The current Unity client does not populate `gripperAvailable` or `gripperOpening`, so it does not actuate the robot gripper.
 
 Press `R` in the Unity player to recalibrate the current wrist orientation as neutral. If the joystick is represented by a custom tracked GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`; otherwise the right-hand XR node is used.
 
@@ -249,3 +302,32 @@ sudo ip link set host-ipvlan up
 ```
 
 Use the correct NIC if it is not `enp2s0f0`, or set `NIC=...` in `.env`.
+
+### Gripper diagnostics
+
+Check that the live state contains both finger joints:
+
+```bash
+curl -s http://localhost:8088/robot_state | python3 -m json.tool
+```
+
+Check the normalized command bridge and controller connection:
+
+```bash
+docker exec moveit_server_wifi bash -lc \
+  'source /opt/ros/humble/setup.bash && \
+   ros2 topic info /vive/gripper_opening -v && \
+   ros2 topic info /gripper_controller/joint_trajectory -v'
+```
+
+The expected graph has `webrtc_input_publisher` publishing `/vive/gripper_opening`, `vive_moveit_server` subscribing to it and publishing `/gripper_controller/joint_trajectory`, and `gripper_controller` subscribing to the trajectory topic.
+
+Confirm the robot controller endpoint:
+
+```bash
+docker exec moveit_server_wifi bash -lc \
+  'source /opt/ros/humble/setup.bash && \
+   ros2 node info /gripper_controller'
+```
+
+If `Input` reports a robot-state error, verify that `/joint_states` contains `gripper_left_finger_joint` and `gripper_right_finger_joint`. If the normalized topic is connected but the trajectory topic has no `gripper_controller` subscriber, fix ROS2 discovery or the robot controller before sending commands.

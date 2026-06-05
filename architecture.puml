@@ -15,6 +15,7 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "ROS2 joint states\n/joint_states" as RobotJointStates
     component "ROS2 arm controller\n/arm_controller/joint_trajectory" as RobotArmCommand
     component "ROS2 head controller\n/head_controller/joint_trajectory" as RobotHeadCommand
+    component "ROS2 gripper controller\n/gripper_controller/joint_trajectory" as RobotGripperCommand
   }
 
   node "ros2_app container\n10.68.0.132\nport 8088" as Ros2App {
@@ -22,8 +23,10 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "LatestFrameVideoTrack" as VideoTrack
     component "WebRTCServer\naiohttp + aiortc" as WebRTCServer
     component "InputPublisher\nROS2 node" as InputPublisher
+    component "RobotInputState\nROS2 node" as RobotInputState
     queue "ROS2 topic\n/vive/head_pose" as HeadPoseTopic
     queue "ROS2 topic\n/vive/hand_target_pose" as HandTargetTopic
+    queue "ROS2 topic\n/vive/gripper_opening" as GripperOpeningTopic
   }
 
   node "moveit_server container\n10.68.0.134" as MoveItContainer {
@@ -33,6 +36,7 @@ node "Robot network\n10.68.0.0/24" as Net {
     queue "ROS2 topic\n/joint_states" as JointStateTopic
     queue "ROS2 topic\n/head_controller/joint_trajectory" as HeadCommandTopic
     queue "ROS2 topic\n/arm_controller/joint_trajectory" as ArmCommandTopic
+    queue "ROS2 topic\n/gripper_controller/joint_trajectory" as GripperCommandTopic
     interface "ROS2 service\n/compute_ik" as ComputeIkService
   }
 
@@ -49,25 +53,33 @@ RobotCamera --> ImageSubscriber : ROS2 sensor_msgs/Image
 RobotJointStates --> JointStateTopic : ROS2 sensor_msgs/JointState
 ArmCommandTopic --> RobotArmCommand : ROS2 trajectory_msgs/JointTrajectory
 HeadCommandTopic --> RobotHeadCommand : ROS2 trajectory_msgs/JointTrajectory
+GripperCommandTopic --> RobotGripperCommand : ROS2 trajectory_msgs/JointTrajectory
 
 ImageSubscriber --> VideoTrack : latest BGR frame
 VideoTrack --> WebRTCServer : media track
 WebRTCServer --> InputPublisher : data-channel JSON messages
+WebRTCServer --> RobotInputState : GET /robot_state
 InputPublisher --> HeadPoseTopic : geometry_msgs/PoseStamped
 InputPublisher --> HandTargetTopic : geometry_msgs/PoseStamped
+InputPublisher --> GripperOpeningTopic : std_msgs/Float64\nnormalized 0..1
 HeadPoseTopic --> MoveItServer : raw HMD PoseStamped
 HandTargetTopic --> MoveItServer : wrist pose target
+GripperOpeningTopic --> MoveItServer : normalized finger opening
 JointStateTopic --> MoveItServer : IK seed state
+RobotJointStates --> RobotInputState : head + finger positions
 RobotStatePublisher --> MoveGroup : robot_description + TF
+RobotStatePublisher --> RobotInputState : wrist + head TF
 MoveGroup -- ComputeIkService : provides
 MoveItServer --> ComputeIkService : moveit_msgs/GetPositionIK\narm group, arm_tool_link
 MoveItServer --> HeadCommandTopic : head_1_joint + head_2_joint\n20 Hz, deadband, 90% limits
 MoveItServer --> ArmCommandTopic : short JointTrajectory commands\nwarmup + joint delta clamp
+MoveItServer --> GripperCommandTopic : synchronized finger targets\n0..0.045 m, velocity-limited
 
 StaticServer --> Browser : serves index.html
 Browser --> WebRTCServer : HTTP POST /offer\nSDP offer/answer
 Browser --> WebRTCServer : HTTP POST /input_offer\nSDP offer/answer
-Browser --> WebRTCServer : input data channel\n10 Hz unity_teleop_pose
+Browser --> WebRTCServer : input data channel\n20 Hz unity_teleop_pose
+Browser --> WebRTCServer : GET /robot_state\nsafe initial head, wrist, gripper state
 Browser .. TurnRelay : ICE relay candidates
 
 Unity --> WebRTCServer : WebRTC video + 6-DoF input
@@ -89,6 +101,8 @@ note right of MoveItServer
   - torso_lift_joint locked out
   - seeded /compute_ik from /joint_states
   - publishes /arm_controller/joint_trajectory
+  - normalized gripper opening -> two finger joints
+  - publishes /gripper_controller/joint_trajectory
   - retries -31 with last reachable orientation
 end note
 

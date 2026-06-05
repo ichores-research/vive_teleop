@@ -76,6 +76,26 @@ class RobotInputState(Node):
             "robot_head_tilt_joint",
             "head_2_joint",
         ).value
+        self._gripper_left_joint = self.declare_parameter(
+            "robot_gripper_left_joint",
+            "gripper_left_finger_joint",
+        ).value
+        self._gripper_right_joint = self.declare_parameter(
+            "robot_gripper_right_joint",
+            "gripper_right_finger_joint",
+        ).value
+        self._gripper_min_position_m = float(
+            self.declare_parameter(
+                "robot_gripper_min_position_m",
+                0.0,
+            ).value
+        )
+        self._gripper_max_position_m = float(
+            self.declare_parameter(
+                "robot_gripper_max_position_m",
+                0.045,
+            ).value
+        )
         self._head_pan_sign = float(
             self.declare_parameter("robot_head_pan_sign", -1.0).value
         )
@@ -120,6 +140,8 @@ class RobotInputState(Node):
         with self._joint_lock:
             pan = self._joint_positions.get(self._head_pan_joint)
             tilt = self._joint_positions.get(self._head_tilt_joint)
+            gripper_left = self._joint_positions.get(self._gripper_left_joint)
+            gripper_right = self._joint_positions.get(self._gripper_right_joint)
             joint_state_age_sec = now_sec - self._last_joint_state_sec
 
         if pan is None or tilt is None:
@@ -130,6 +152,13 @@ class RobotInputState(Node):
         elif joint_state_age_sec > self._max_state_age_sec:
             errors.append(
                 f"Head joint state is stale ({joint_state_age_sec:.2f}s old)"
+            )
+
+        if gripper_left is None or gripper_right is None:
+            errors.append(
+                "Gripper joint state is unavailable for "
+                f"'{self._gripper_left_joint}' and "
+                f"'{self._gripper_right_joint}'"
             )
 
         hand_transform = self._lookup_transform(self._hand_frame, errors)
@@ -168,6 +197,25 @@ class RobotInputState(Node):
                 "frame": self._reference_frame,
                 "sourceFrame": self._hand_frame,
                 **hand_pose,
+            }
+
+        if gripper_left is not None and gripper_right is not None:
+            position_span = (
+                self._gripper_max_position_m - self._gripper_min_position_m
+            )
+            average_position = (gripper_left + gripper_right) * 0.5
+            if position_span > 1e-9:
+                opening = (
+                    average_position - self._gripper_min_position_m
+                ) / position_span
+            else:
+                opening = 0.0
+            snapshot["gripper"] = {
+                "opening": max(0.0, min(1.0, opening)),
+                "leftPosition": gripper_left,
+                "rightPosition": gripper_right,
+                "minPosition": self._gripper_min_position_m,
+                "maxPosition": self._gripper_max_position_m,
             }
 
         return snapshot

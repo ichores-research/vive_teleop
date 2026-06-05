@@ -12,15 +12,13 @@ vive_moveit_server:
       - head_1_joint
       - head_2_joint
     head_publish_rate_hz: 20.0
-    #It tells the controller how much time it has to interpolate from its current position 
+    # It tells the controller how much time it has to interpolate from its current position
     # to the new target angle.
     head_command_duration_sec: 0.1
-    
-    # A noise filter threshold (in radians). 
-    #If the difference between the user's new head angle and the previously sent angle
-    # is smaller than this value (0.01 ~ 0.57°), the node ignores it
+
+    # A noise filter threshold in radians. Smaller head changes are ignored.
     head_deadband_rad: 0.002
-    head_limit_scale: 0.9 # 90% of joint limits
+    head_limit_scale: 0.9  # 90% of joint limits
     head_pan_limits_rad: [-1.24, 1.24]
     head_tilt_limits_rad: [-0.98, 0.72]
     head_pan_sign: -1.0
@@ -37,6 +35,19 @@ vive_moveit_server:
     execution_mode: ik_topic
     arm_command_topic: /arm_controller/joint_trajectory
     torso_command_topic: /torso_controller/joint_trajectory
+    gripper_input_topic: /vive/gripper_opening
+    gripper_command_topic: /gripper_controller/joint_trajectory
+    gripper_joint_names:
+      - gripper_right_finger_joint
+      - gripper_left_finger_joint
+    # Normalized input 0..1 maps each finger from 0.0 m to 0.045 m.
+    gripper_min_position_m: 0.0
+    gripper_max_position_m: 0.045
+    # Ignore duplicate physical targets within 0.5 mm.
+    gripper_deadband_m: 0.0005
+    # Use at least this duration, extending it to respect the velocity cap.
+    gripper_command_duration_sec: 0.15
+    gripper_max_velocity_mps: 0.04
     joint_state_topic: /joint_states
     ik_service_name: /compute_ik
     async_execution: true

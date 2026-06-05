@@ -25,6 +25,7 @@ from moveit_msgs.msg import (
 from moveit_msgs.srv import GetPositionIK
 from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import Float64
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 
@@ -169,6 +170,14 @@ class ViveMoveItServer(Node):
             "torso_command_topic",
             "/torso_controller/joint_trajectory",
         ).value
+        gripper_input_topic = self.declare_parameter(
+            "gripper_input_topic",
+            "/vive/gripper_opening",
+        ).value
+        gripper_command_topic = self.declare_parameter(
+            "gripper_command_topic",
+            "/gripper_controller/joint_trajectory",
+        ).value
         joint_state_topic = self.declare_parameter(
             "joint_state_topic",
             "/joint_states",
@@ -290,6 +299,32 @@ class ViveMoveItServer(Node):
         )
         self.head_pan_sign = float(self.declare_parameter("head_pan_sign", 1.0).value)
         self.head_tilt_sign = float(self.declare_parameter("head_tilt_sign", 1.0).value)
+        self.gripper_joint_names = _declare_string_list_parameter(
+            self,
+            "gripper_joint_names",
+            [
+                "gripper_right_finger_joint",
+                "gripper_left_finger_joint",
+            ],
+        )
+        self.gripper_min_position_m = float(
+            self.declare_parameter("gripper_min_position_m", 0.0).value
+        )
+        self.gripper_max_position_m = float(
+            self.declare_parameter("gripper_max_position_m", 0.045).value
+        )
+        self.gripper_deadband_m = float(
+            self.declare_parameter("gripper_deadband_m", 0.0005).value
+        )
+        self.gripper_command_duration_sec = float(
+            self.declare_parameter(
+                "gripper_command_duration_sec",
+                0.15,
+            ).value
+        )
+        self.gripper_max_velocity_mps = float(
+            self.declare_parameter("gripper_max_velocity_mps", 0.04).value
+        )
 
         self.hand_position_scale = _vector_parameter(
             self.declare_parameter(
@@ -344,6 +379,7 @@ class ViveMoveItServer(Node):
         self.last_successful_ik_target: Optional[PoseStamped] = None
         self.current_joint_positions: Dict[str, float] = {}
         self.last_commanded_joint_positions: Dict[str, float] = {}
+        self.last_gripper_target_position: Optional[float] = None
         self.last_plan_started_sec = 0.0
         self.last_ik_request_sec = 0.0
         self.ik_warmup_started_sec = 0.0
@@ -362,6 +398,11 @@ class ViveMoveItServer(Node):
         self.trajectory_publisher = self.create_publisher(
             JointTrajectory,
             arm_command_topic,
+            10,
+        )
+        self.gripper_trajectory_publisher = self.create_publisher(
+            JointTrajectory,
+            gripper_command_topic,
             10,
         )
         self.torso_trajectory_publisher = None
@@ -391,6 +432,12 @@ class ViveMoveItServer(Node):
             10,
         )
         self.create_subscription(
+            Float64,
+            gripper_input_topic,
+            self._on_gripper_opening,
+            10,
+        )
+        self.create_subscription(
             JointState,
             joint_state_topic,
             self._on_joint_state,
@@ -407,6 +454,10 @@ class ViveMoveItServer(Node):
         self.get_logger().info(
             f"Head poses publish JointTrajectory commands to '{head_command_topic}' "
             f"at {self.head_publish_rate_hz:.1f} Hz"
+        )
+        self.get_logger().info(
+            f"Gripper opening commands on '{gripper_input_topic}' publish to "
+            f"'{gripper_command_topic}'"
         )
         self.get_logger().info(
             f"MoveIt action '{self.move_group_action_name}', group "
@@ -535,6 +586,85 @@ class ViveMoveItServer(Node):
 
         for name, position in zip(message.name, message.position):
             self.current_joint_positions[name] = float(position)
+
+    def _on_gripper_opening(self, message: Float64) -> None:
+        if not math.isfinite(float(message.data)):
+            self._warn_throttled(
+                "invalid_gripper_opening",
+                "Ignoring non-finite gripper opening",
+                2.0,
+            )
+            return
+
+        if len(self.gripper_joint_names) != 2:
+            self._warn_throttled(
+                "invalid_gripper_joints",
+                "gripper_joint_names must contain exactly two finger joints",
+                5.0,
+            )
+            return
+
+        missing_joints = [
+            joint_name
+            for joint_name in self.gripper_joint_names
+            if joint_name not in self.current_joint_positions
+        ]
+        if missing_joints:
+            self._warn_throttled(
+                "gripper_joint_state_wait",
+                "Waiting for gripper joint states; missing "
+                + ", ".join(missing_joints),
+                2.0,
+            )
+            return
+
+        opening = _clamp(float(message.data), 0.0, 1.0)
+        lower = min(self.gripper_min_position_m, self.gripper_max_position_m)
+        upper = max(self.gripper_min_position_m, self.gripper_max_position_m)
+        target_position = lower + ((upper - lower) * opening)
+        current_positions = [
+            self.current_joint_positions[joint_name]
+            for joint_name in self.gripper_joint_names
+        ]
+        current_average = sum(current_positions) / len(current_positions)
+        deadband = max(0.0, self.gripper_deadband_m)
+
+        if (
+            self.last_gripper_target_position is None
+            and abs(target_position - current_average) <= deadband
+        ):
+            self.last_gripper_target_position = target_position
+            return
+
+        if (
+            self.last_gripper_target_position is not None
+            and abs(
+                target_position - self.last_gripper_target_position
+            ) <= deadband
+        ):
+            return
+
+        duration_sec = max(0.02, self.gripper_command_duration_sec)
+        max_velocity = max(0.0, self.gripper_max_velocity_mps)
+        if max_velocity > 1e-9:
+            duration_sec = max(
+                duration_sec,
+                abs(target_position - current_average) / max_velocity,
+            )
+
+        point = JointTrajectoryPoint()
+        point.positions = [
+            target_position
+            for _joint_name in self.gripper_joint_names
+        ]
+        point.time_from_start = Duration(seconds=duration_sec).to_msg()
+
+        trajectory = JointTrajectory()
+        trajectory.header.stamp = self.get_clock().now().to_msg()
+        trajectory.joint_names = list(self.gripper_joint_names)
+        trajectory.points = [point]
+        self.gripper_trajectory_publisher.publish(trajectory)
+        self.last_gripper_target_position = target_position
 
     def _maybe_send_latest_target(self) -> None:
         if self.goal_in_flight or self.pending_hand_target is None:
