@@ -1,4 +1,5 @@
 @startuml
+!pragma layout smetana
 title vive_teleop architecture
 
 skinparam componentStyle rectangle
@@ -9,15 +10,11 @@ actor "Browser debug client\nindex.html\nhttp://localhost:8000" as Browser
 actor "Unity VR headset\nunity-vr-headset" as Unity
 
 node "Robot network\n10.68.0.0/24" as Net {
-  node "Robot\nROS1 master\n10.68.0.1:11311" as Robot {
-    component "ROS1 camera topic\n/xtion/rgb/image_raw" as Ros1Camera
-    component "ROS1 joint states\n/joint_states" as Ros1JointStates
-    component "ROS1 arm controller\n/arm_controller/command" as Ros1ArmCommand
-    component "ROS1 head controller\n/head_controller/command" as Ros1HeadCommand
-  }
-
-  node "ros1_bridge container\n10.68.0.131" as Bridge {
-    component "ros1_bridge dynamic_bridge\nNoetic -> Foxy" as DynamicBridge
+  node "Robot\nROS2 graph\n10.68.0.1" as Robot {
+    component "ROS2 camera topic\n/xtion/rgb/image_raw" as RobotCamera
+    component "ROS2 joint states\n/joint_states" as RobotJointStates
+    component "ROS2 arm controller\n/arm_controller/command" as RobotArmCommand
+    component "ROS2 head controller\n/head_controller/command" as RobotHeadCommand
   }
 
   node "ros2_app container\n10.68.0.132\nport 8088" as Ros2App {
@@ -48,14 +45,10 @@ cloud "Docker host" as Host {
   component "python3 -m http.server 8000" as StaticServer
 }
 
-Ros1Camera --> DynamicBridge : ROS1 topic
-DynamicBridge --> ImageSubscriber : ROS2 /xtion/rgb/image_raw
-Ros1JointStates --> DynamicBridge : ROS1 topic
-DynamicBridge --> JointStateTopic : ROS2 sensor_msgs/JointState
-ArmCommandTopic --> DynamicBridge : ROS2 trajectory_msgs/JointTrajectory
-DynamicBridge --> Ros1ArmCommand : ROS1 trajectory_msgs/JointTrajectory
-HeadCommandTopic --> DynamicBridge : ROS2 trajectory_msgs/JointTrajectory
-DynamicBridge --> Ros1HeadCommand : ROS1 trajectory_msgs/JointTrajectory
+RobotCamera --> ImageSubscriber : ROS2 sensor_msgs/Image
+RobotJointStates --> JointStateTopic : ROS2 sensor_msgs/JointState
+ArmCommandTopic --> RobotArmCommand : ROS2 trajectory_msgs/JointTrajectory
+HeadCommandTopic --> RobotHeadCommand : ROS2 trajectory_msgs/JointTrajectory
 
 ImageSubscriber --> VideoTrack : latest BGR frame
 VideoTrack --> WebRTCServer : media track
@@ -102,6 +95,7 @@ end note
 note bottom of Net
   Runtime network: docker compose field_net
   driver: ipvlan, mode: l2
+  Direct CycloneDDS peer: 10.68.0.1
 end note
 
 @enduml

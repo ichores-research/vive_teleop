@@ -31,7 +31,7 @@ vive_moveit_server:
     # "ik_topic" uses MoveIt's seeded IK service for small 6-DoF joystick
     # updates, then publishes short JointTrajectory commands.
     # "trajectory_topic" asks MoveIt to plan, then publishes the planned
-    # JointTrajectory segments to bridgeable ROS controller topics.
+    # JointTrajectory segments to ROS2 controller topics.
     # Use "moveit" only when ROS2 controller actions are available to MoveIt.
     # "plan_only" validates planning without commanding the robot.
     execution_mode: ik_topic

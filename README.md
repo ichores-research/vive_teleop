@@ -1,15 +1,14 @@
 # vive_teleop
 
-`vive_teleop` bridges robot ROS1 topics into ROS2, serves the camera over WebRTC, accepts WebRTC input, turns HMD pose into TIAGo head controller commands, and turns wrist pose targets into TIAGo arm controller commands through MoveIt IK.
+`vive_teleop` connects directly to the robot's ROS2 graph, serves the camera over WebRTC, accepts WebRTC input, turns HMD pose into TIAGo head controller commands, and turns wrist pose targets into TIAGo arm controller commands through MoveIt IK.
 
 The Unity VR client is still the intended headset frontend, but `index.html` can be used as a lightweight browser debug client without launching Unity or SteamVR.
 
 ## Architecture
 
-The current system has five main pieces:
+The current system has four main pieces:
 
-- `ros1_bridge`: ROS1 Noetic to ROS2 Foxy dynamic bridge. It connects to the robot ROS master and exposes ROS1 topics into ROS2.
-- `ros2_app`: ROS2 Humble application. It waits for `/xtion/rgb/image_raw`, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
+- `ros2_app`: ROS2 Humble application. It subscribes directly to the robot's `/xtion/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
 - `moveit_server`: ROS2 MoveIt teleoperation node. It consumes typed WebRTC pose topics, converts raw HMD orientation into head joint trajectories, and uses seeded MoveIt IK for small joystick-style wrist updates.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
@@ -28,11 +27,12 @@ See [architecture.puml](architecture.puml) for the PlantUML source. Regenerate [
 
 Runtime containers use the `field_net` ipvlan network:
 
-- Robot / ROS master: `10.68.0.1`
-- `ros1_bridge`: `10.68.0.131`
+- Robot / ROS2 graph: `10.68.0.1`
 - `ros2_app`: `10.68.0.132`
 - `coturn`: `10.68.0.133`
 - `moveit_server`: `10.68.0.134`
+
+The ROS2 containers use CycloneDDS on domain `0`, with the robot at `10.68.0.1` configured as a discovery peer. The existing container and robot addresses are unchanged; `10.68.0.131` is no longer used.
 
 `ros2_app` publishes `8088:8088`, but direct host access can still depend on the ipvlan host-interface setup. If the browser cannot reach `http://localhost:8088`, create the host ipvlan interface shown at the bottom of `docker-compose.yml` and try direct container access at `http://10.68.0.132:8088`.
 
@@ -68,7 +68,7 @@ When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages
 
 ## MoveIt server
 
-The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app`, so it receives the WebRTC topics directly on the ROS2 side of the bridge. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, starts `robot_state_publisher`, and then starts the teleop node.
+The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app` and the robot. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, starts `robot_state_publisher`, and then starts the teleop node.
 
 Default behavior:
 
@@ -79,7 +79,7 @@ Default behavior:
 - Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for every 10 Hz input update.
 - Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
 - Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
-- Publishes short `trajectory_msgs/JointTrajectory` commands to `/arm_controller/command`, which the ROS1 bridge can forward to the robot controller.
+- Publishes short `trajectory_msgs/JointTrajectory` commands directly to the robot's `/arm_controller/command` topic.
 - Overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik` in local, one-attempt mode for small repeated joystick moves.
 - Ramps IK output after startup or a pause with `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec` so the first stationary target does not jerk at the full joint-delta limit.
 - If exact 6-DoF IK returns `NO_IK_SOLUTION` (`-31`) and a previous reachable wrist orientation exists, it retries the same position with that last reachable orientation.
@@ -88,7 +88,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 
 - `arm_group`: currently `arm` to force no torso. `arm_torso` allows torso motion if you deliberately want it.
 - `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
-- `head_command_topic`: trajectory topic bridged to the ROS1 head controller, default `/head_controller/command`.
+- `head_command_topic`: direct ROS2 trajectory topic for the head controller, default `/head_controller/command`.
 - `head_joint_names`: must match the robot's head joints, typically `head_1_joint` and `head_2_joint` for this TIAGo.
 - `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.06` seconds.
 - `head_deadband_rad`: suppresses tiny pan/tilt updates; default `0.01` rad.
@@ -97,7 +97,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
 - `ik_service_name`: defaults to `/compute_ik`.
 - `joint_state_topic`: defaults to `/joint_states`.
-- `arm_command_topic`: trajectory topic bridged to the ROS1 arm controller.
+- `arm_command_topic`: direct ROS2 trajectory topic for the arm controller.
 - `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before IK.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
 - `max_joint_delta_rad`, `joint_smoothing_alpha`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output.
@@ -112,7 +112,7 @@ MOVEIT_SERVER_LAUNCH_ARGS="moveit_launch_enabled:=false" \
   sudo docker compose up --build moveit_server
 ```
 
-To pass robot variant arguments through to TIAGo MoveIt, set `moveit_arm`, `moveit_arm_type`, `moveit_base_type`, `moveit_end_effector`, and/or `moveit_ft_sensor` in `MOVEIT_SERVER_LAUNCH_ARGS`. `moveit_allow_trajectory_execution` defaults to `False`; the teleop node commands the real ROS1 robot by publishing short IK-generated trajectories to the bridged controller topics instead.
+To pass robot variant arguments through to TIAGo MoveIt, set `moveit_arm`, `moveit_arm_type`, `moveit_base_type`, `moveit_end_effector`, and/or `moveit_ft_sensor` in `MOVEIT_SERVER_LAUNCH_ARGS`. `moveit_allow_trajectory_execution` defaults to `False`; the teleop node commands the real ROS2 robot by publishing short IK-generated trajectories directly to the controller topics instead.
 
 ## Running
 
@@ -122,7 +122,7 @@ Start the containers:
 sudo docker compose up --build
 ```
 
-This starts `ros1_bridge`, `ros2_app`, `moveit_server`, and `coturn`. The MoveIt container needs a TIAGo MoveIt/robot description configuration available on the ROS2 graph before arm planning can succeed.
+This starts `ros2_app`, `moveit_server`, and `coturn`. The MoveIt container needs a TIAGo MoveIt/robot description configuration available on the ROS2 graph before arm planning can succeed.
 
 In another terminal, serve the debug client:
 
@@ -154,20 +154,20 @@ WEBRTC_NIC=wlan0 ./scripts/up-wifi-webrtc.sh
 
 The script detects the current Wi-Fi host IP, exports `WEBRTC_HOST_IP`, detects the field-network host IP as `ROS_FIELD_HOST_IP`, generates a matching CycloneDDS config, and starts host-network Wi-Fi variants:
 
-- `ros1_bridge_wifi` on the host network, using the static robot Ethernet interface for ROS1 robot access.
 - `ros2_app_wifi` on the host network, so WebRTC signaling and media are reachable through the host Wi-Fi IP.
-- `moveit_server_wifi` on the host network, using the same ROS2 DDS interface as the bridge/app.
+- `moveit_server_wifi` on the host network, using the same ROS2 DDS interface as the app.
 - `coturn_wifi` on the host network, listening on both the Wi-Fi IP and the field-network host IP.
-- local ROS2 bridge/app discovery over loopback by default with `ROS2_DDS_INTERFACE=lo`.
+- direct robot discovery through `ROS_FIELD_HOST_IP` by default, with `10.68.0.1` as the DDS peer.
 - client-side ICE with `WEBRTC_PUBLIC_TURN_URLS=turn:<wifi-host-ip>:3478?...`.
 - server-side ICE with `WEBRTC_TURN_URLS=turn:127.0.0.1:3478?...` inside the host-network ROS2 app.
 
 This avoids passing WebRTC media through Docker port publishing; Unity and browser clients talk directly to the host Wi-Fi IP.
 
-If another ROS2 node outside this host must discover the Wi-Fi bridge/app, override the DDS interface with the host's field-network IP:
+To override either the DDS interface or robot address:
 
 ```bash
-ROS2_DDS_INTERFACE=10.68.0.130 ./scripts/up-wifi-webrtc.sh
+ROS2_DDS_INTERFACE=10.68.0.130 ROBOT_IP=10.68.0.1 \
+  ./scripts/up-wifi-webrtc.sh
 ```
 
 Serve the debug client on Wi-Fi:
@@ -189,7 +189,7 @@ It returns the signaling URLs and client-facing ICE server list.
 For browser debugging:
 
 1. Wait for `ros2_app_wifi` logs to show `======== Running on http://0.0.0.0:8088 ========`.
-2. Check that `ros1_bridge_wifi` logs do not show ROS master connection errors.
+2. Check direct robot discovery with `docker exec ros2_app_wifi bash -lc 'source /opt/ros/humble/setup.bash && ros2 topic list'`.
 3. If the debug page is served by this host, try `Host :8088` first.
 4. If the debug page is served from another PC, set `Server` to `http://<host-ip>:8088` manually.
 5. Click `Start Video` to connect to `/offer`.

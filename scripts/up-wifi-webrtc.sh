@@ -18,7 +18,8 @@ fi
 
 export WEBRTC_HOST_IP="$host_ip"
 export ROS_FIELD_HOST_IP="$field_host_ip"
-export ROS2_DDS_INTERFACE="${ROS2_DDS_INTERFACE:-lo}"
+export ROBOT_IP="${ROBOT_IP:-10.68.0.1}"
+export ROS2_DDS_INTERFACE="${ROS2_DDS_INTERFACE:-$ROS_FIELD_HOST_IP}"
 export ROS2_DDS_ALLOW_MULTICAST="${ROS2_DDS_ALLOW_MULTICAST:-true}"
 export TURN_USER="${TURN_USER:-dummy}"
 export TURN_PASSWORD="${TURN_PASSWORD:-dummy}"
@@ -47,20 +48,26 @@ cat > "$CYCLONEDDS_HOST_CONFIG" <<EOF
 <CycloneDDS xmlns="https://cyclonedds.io/xml">
   <Domain Id="any">
     <General>
-      <NetworkInterfaceAddress>${ROS2_DDS_INTERFACE}</NetworkInterfaceAddress>
+      <Interfaces>
+        <NetworkInterface address="${ROS2_DDS_INTERFACE}"/>
+      </Interfaces>
       <AllowMulticast>${ROS2_DDS_ALLOW_MULTICAST}</AllowMulticast>
     </General>
     <Discovery>
       <ParticipantIndex>auto</ParticipantIndex>
       <MaxAutoParticipantIndex>100</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer Address="${ROBOT_IP}"/>
+      </Peers>
     </Discovery>
   </Domain>
 </CycloneDDS>
 EOF
 
 printf 'Using WebRTC host IP: %s\n' "$WEBRTC_HOST_IP"
-printf 'Using field host IP for ROS1 robot access: %s\n' "$ROS_FIELD_HOST_IP"
-printf 'Using DDS interface for local ROS2 bridge/app discovery: %s\n' "$ROS2_DDS_INTERFACE"
+printf 'Using ROS2 robot IP: %s\n' "$ROBOT_IP"
+printf 'Using field host IP for ROS2 robot access: %s\n' "$ROS_FIELD_HOST_IP"
+printf 'Using DDS interface for direct robot discovery: %s\n' "$ROS2_DDS_INTERFACE"
 printf 'CycloneDDS config: %s\n' "$CYCLONEDDS_HOST_CONFIG"
 printf 'Signaling URL: http://%s:8088\n' "$WEBRTC_HOST_IP"
 printf 'Client config URL: http://%s:8088/config\n' "$WEBRTC_HOST_IP"
@@ -69,7 +76,7 @@ printf 'Server TURN URLs: %s\n' "$WEBRTC_TURN_URLS"
 
 cd "$repo_dir"
 docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
-  ros1_bridge ros2_app moveit_server coturn >/dev/null 2>&1 || true
+  ros2_app moveit_server coturn >/dev/null 2>&1 || true
 
 exec docker compose -f docker-compose.yml -f docker-compose.wifi.yml up --build "$@" \
-  ros1_bridge_wifi ros2_app_wifi moveit_server_wifi coturn_wifi
+  ros2_app_wifi moveit_server_wifi coturn_wifi

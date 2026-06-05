@@ -7,6 +7,7 @@ from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.task import Future
 
 from geometry_msgs.msg import Pose, PoseStamped, Quaternion
@@ -390,7 +391,7 @@ class ViveMoveItServer(Node):
             JointState,
             joint_state_topic,
             self._on_joint_state,
-            10,
+            qos_profile_sensor_data,
         )
         self.create_timer(0.02, self._maybe_send_latest_target)
         head_timer_period_sec = 1.0 / max(1.0, self.head_publish_rate_hz)

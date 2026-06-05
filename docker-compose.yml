@@ -1,28 +1,4 @@
 services:
-  ros1_bridge:
-    build:
-      context: ./bridge
-      network: host
-    cap_add:
-      - NET_ADMIN
-    command:
-      - /bin/bash
-      - -c
-      - |
-        unset ROS_DISTRO
-        source /opt/ros/noetic/setup.bash
-        export ROS_MASTER_URI=http://10.68.0.1:11311
-        unset ROS_DISTRO
-        source /opt/ros/foxy/setup.bash
-        source /bridge_ws/install/setup.bash
-        exec /usr/local/bin/filter_ros1_bridge_logs.py ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
-    networks:
-      field_net:
-        ipv4_address: 10.68.0.131
-    environment:
-      - ROS_MASTER_URI=http://10.68.0.1:11311
-      - ROS_IP=10.68.0.131
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
   ros2_app:
     build:
       context: ./ros2_app
@@ -54,7 +30,6 @@ services:
       bash -c "
         source /opt/ros/humble/setup.bash &&
         source install/setup.bash &&
-        /wait-for-bridge.sh &&
         ros2 run image_listener image_subscriber
       "
 
@@ -66,11 +41,10 @@ services:
     container_name: moveit_server
 
     depends_on:
-      - ros1_bridge
       - ros2_app
 
     volumes:
-      - ./ros2_app/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
+      - ./moveit_server/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
 
     working_dir: /moveit_ws
 
