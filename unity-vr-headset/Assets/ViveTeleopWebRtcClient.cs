@@ -1,10 +1,14 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using Unity.WebRTC;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.XR;
+using Valve.VR;
 
 public class ViveTeleopWebRtcClient : MonoBehaviour
 {
@@ -35,20 +39,53 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     public bool sendJoystickWristPose = true;
     public Transform wristPoseSource;
     public XRNode wristXrNode = XRNode.RightHand;
+    public bool preferOpenVrControllerTracking = true;
+    public Transform wristTrackingOrigin;
     public bool calibrateWristOnFirstSample = true;
     public Vector3 wristRotationOffsetEuler = Vector3.zero;
     public KeyCode recalibrateWristKey = KeyCode.R;
+    public float wristPositionScale = 1f;
+    public bool requireWristDeadman = true;
+    [Range(0f, 1f)]
+    public float wristDeadmanTriggerThreshold = 0.15f;
+
+    [Header("6-DoF Recording")]
+    public bool recordControllerPoseOnStart;
+    public bool toggleRecordingWithMenuButton = true;
+    public KeyCode toggleRecordingKey = KeyCode.Space;
+    public string recordingFolderName = "ViveTeleopRecordings";
+    public int recordingFlushIntervalSamples = 30;
 
     RTCPeerConnection videoPeer;
     RTCPeerConnection inputPeer;
     RTCDataChannel inputChannel;
     Coroutine webRtcUpdateRoutine;
-    Coroutine poseSendRoutine;
+    Coroutine poseSampleRoutine;
     bool inputChannelOpen;
     bool wristCalibrationReady;
     bool calibrateWristOnNextSample;
+    bool robotWristStateReady;
+    bool wristCommandActive;
     bool recenterHeadsetPoseOnNextSample;
-    Quaternion wristCalibrationInverse = Quaternion.identity;
+    bool previousRecordingMenuButton;
+    bool recordingActive;
+    uint lastOpenVrControllerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
+    int recordingSamplesSinceFlush;
+    string recordingPath;
+    StreamWriter recordingWriter;
+    readonly Dictionary<uint, string> openVrDeviceNames =
+        new Dictionary<uint, string>();
+    readonly List<InputDevice> xrWristDevices = new List<InputDevice>();
+    Vector3 controllerWristAnchorPosition;
+    Quaternion controllerWristAnchorRotation = Quaternion.identity;
+    Vector3 robotWristAnchorPosition;
+    Quaternion robotWristAnchorRotation = Quaternion.identity;
+    Vector3 lastRobotWristTargetPosition;
+    Quaternion lastRobotWristTargetRotation = Quaternion.identity;
+    string robotWristFrame = "base_footprint";
+
+    public bool IsRecording => recordingActive;
+    public string RecordingPath => recordingPath;
 
     IEnumerator Start()
     {
@@ -73,6 +110,16 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
         webRtcUpdateRoutine = StartCoroutine(WebRTC.Update());
 
+        if (poseSendRateHz > 0f)
+        {
+            poseSampleRoutine = StartCoroutine(SendPoseLoop());
+        }
+
+        if (ShouldRecordOnStart())
+        {
+            StartRecording();
+        }
+
         if (connectOnStart)
         {
             yield return ConnectRoutine();
@@ -95,6 +142,11 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             RecenterHeadsetPose();
         }
 
+        if (Input.GetKeyDown(toggleRecordingKey))
+        {
+            ToggleRecording();
+        }
+
         LockDisplayToCamera();
     }
 
@@ -105,13 +157,8 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
     public void Disconnect()
     {
-        if (poseSendRoutine != null)
-        {
-            StopCoroutine(poseSendRoutine);
-            poseSendRoutine = null;
-        }
-
         inputChannelOpen = false;
+        wristCommandActive = false;
         inputChannel?.Close();
         inputChannel = null;
 
@@ -154,6 +201,15 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
         if (connectInput)
         {
+            yield return LoadRobotWristState(serverConfig);
+            if (!robotWristStateReady)
+            {
+                Debug.LogError(
+                    "ViveTeleop WebRTC: robot wrist state is unavailable; " +
+                    "input is disabled to avoid an uncalibrated arm command.");
+                yield break;
+            }
+
             yield return ConnectInput(serverConfig);
         }
     }
@@ -190,6 +246,67 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         });
     }
 
+    IEnumerator LoadRobotWristState(ServerConfig serverConfig)
+    {
+        robotWristStateReady = false;
+        wristCalibrationReady = false;
+        wristCommandActive = false;
+
+        var stateUrl = $"{TrimTrailingSlash(serverConfig.serverUrl)}/robot_state";
+        using var request = UnityWebRequest.Get(stateUrl);
+        yield return request.SendWebRequest();
+
+        if (request.result != UnityWebRequest.Result.Success)
+        {
+            Debug.LogError(
+                $"ViveTeleop WebRTC: robot state fetch failed from {stateUrl}: " +
+                request.error);
+            yield break;
+        }
+
+        var snapshot =
+            JsonUtility.FromJson<RobotStateSnapshot>(request.downloadHandler.text);
+        if (snapshot == null ||
+            snapshot.wrist == null ||
+            snapshot.wrist.position == null ||
+            snapshot.wrist.orientation == null)
+        {
+            Debug.LogError(
+                $"ViveTeleop WebRTC: robot state from {stateUrl} is not ready.");
+            yield break;
+        }
+
+        if (!snapshot.ready)
+        {
+            Debug.LogWarning(
+                "ViveTeleop WebRTC: full robot state is still warming up; " +
+                "using the valid wrist transform for arm anchoring.");
+        }
+
+        var position = snapshot.wrist.position.ToVector3();
+        var rotation = snapshot.wrist.orientation.ToQuaternion();
+        if (!IsFinite(position) || !TryNormalize(ref rotation))
+        {
+            Debug.LogError(
+                "ViveTeleop WebRTC: robot state contained an invalid wrist pose.");
+            yield break;
+        }
+
+        robotWristFrame = string.IsNullOrWhiteSpace(snapshot.wrist.frame)
+            ? "base_footprint"
+            : snapshot.wrist.frame;
+        robotWristAnchorPosition = position;
+        robotWristAnchorRotation = rotation;
+        lastRobotWristTargetPosition = position;
+        lastRobotWristTargetRotation = rotation;
+        robotWristStateReady = true;
+
+        Debug.Log(
+            $"ViveTeleop WebRTC: loaded robot wrist anchor " +
+            $"frame='{robotWristFrame}' xyz=({position.x:F3}, " +
+            $"{position.y:F3}, {position.z:F3}).");
+    }
+
     IEnumerator ConnectVideo(ServerConfig serverConfig)
     {
         videoPeer = CreatePeer(serverConfig, "video");
@@ -219,11 +336,6 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             if (sendPoseWhenChannelOpens)
             {
                 SendPose();
-            }
-
-            if (poseSendRoutine == null && poseSendRateHz > 0f)
-            {
-                poseSendRoutine = StartCoroutine(SendPoseLoop());
             }
         };
         inputChannel.OnClose = () =>
@@ -385,22 +497,15 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     IEnumerator SendPoseLoop()
     {
         var wait = new WaitForSeconds(1f / Mathf.Max(1f, poseSendRateHz));
-        while (inputChannelOpen)
+        while (true)
         {
             SendPose();
             yield return wait;
         }
-
-        poseSendRoutine = null;
     }
 
     public void SendPose()
     {
-        if (!inputChannelOpen || inputChannel == null)
-        {
-            return;
-        }
-
         var payload = new PosePayload
         {
             type = "unity_teleop_pose",
@@ -421,6 +526,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
                 var hmdPosition = hmdSource.position;
                 var hmdRotation = hmdSource.rotation;
                 payload.hmdAvailable = true;
+                payload.hmdFrame = "unity_world";
                 payload.hmdPx = hmdPosition.x;
                 payload.hmdPy = hmdPosition.y;
                 payload.hmdPz = hmdPosition.z;
@@ -436,24 +542,58 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         {
             var correctedRotation =
                 wristPose.rotation * Quaternion.Euler(wristRotationOffsetEuler);
+            var deadmanPressed =
+                !requireWristDeadman ||
+                joystickState.trigger >= wristDeadmanTriggerThreshold ||
+                joystickState.grip >= 0.5f;
+            var startedCommand = deadmanPressed && !wristCommandActive;
             var shouldCalibrate =
                 calibrateWristOnNextSample ||
-                (calibrateWristOnFirstSample && !wristCalibrationReady);
+                (!wristCalibrationReady &&
+                    (calibrateWristOnFirstSample || deadmanPressed)) ||
+                startedCommand;
 
-            if (shouldCalibrate)
+            if (shouldCalibrate && robotWristStateReady)
             {
-                wristCalibrationInverse = Quaternion.Inverse(correctedRotation);
+                controllerWristAnchorPosition = wristPose.position;
+                controllerWristAnchorRotation = correctedRotation;
+                robotWristAnchorPosition = lastRobotWristTargetPosition;
+                robotWristAnchorRotation = lastRobotWristTargetRotation;
                 wristCalibrationReady = true;
                 calibrateWristOnNextSample = false;
-                Debug.Log("ViveTeleop WebRTC: calibrated wrist rotation reference.");
+                Debug.Log(
+                    "ViveTeleop WebRTC: anchored controller to the current " +
+                    "robot wrist target.");
             }
 
-            var robotWristRotation = wristCalibrationReady
-                ? wristCalibrationInverse * correctedRotation
-                : correctedRotation;
+            wristCommandActive = deadmanPressed;
+
+            if (robotWristStateReady && wristCalibrationReady && deadmanPressed)
+            {
+                var unityDelta =
+                    wristPose.position - controllerWristAnchorPosition;
+                var robotDelta =
+                    UnityDeltaToRobot(unityDelta) * wristPositionScale;
+                var unityRotationDelta =
+                    correctedRotation *
+                    Quaternion.Inverse(controllerWristAnchorRotation);
+                var robotRotationDelta =
+                    UnityRotationDeltaToRobot(unityRotationDelta);
+
+                lastRobotWristTargetPosition =
+                    robotWristAnchorPosition + robotDelta;
+                lastRobotWristTargetRotation =
+                    robotRotationDelta * robotWristAnchorRotation;
+                TryNormalize(ref lastRobotWristTargetRotation);
+            }
 
             payload.wristAvailable = true;
+            payload.wristCommandEnabled =
+                robotWristStateReady &&
+                wristCalibrationReady &&
+                deadmanPressed;
             payload.wristSource = wristPose.source;
+            payload.wristFrame = "unity_world";
             payload.wristPx = wristPose.position.x;
             payload.wristPy = wristPose.position.y;
             payload.wristPz = wristPose.position.z;
@@ -461,22 +601,86 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             payload.wristRy = correctedRotation.y;
             payload.wristRz = correctedRotation.z;
             payload.wristRw = correctedRotation.w;
-            payload.robotWristFrame = wristCalibrationReady
-                ? "calibrated_relative"
-                : "unity_world";
-            payload.robotWristRx = robotWristRotation.x;
-            payload.robotWristRy = robotWristRotation.y;
-            payload.robotWristRz = robotWristRotation.z;
-            payload.robotWristRw = robotWristRotation.w;
+            payload.robotWristFrame = robotWristFrame;
+            payload.robotWristPx = lastRobotWristTargetPosition.x;
+            payload.robotWristPy = lastRobotWristTargetPosition.y;
+            payload.robotWristPz = lastRobotWristTargetPosition.z;
+            payload.robotWristRx = lastRobotWristTargetRotation.x;
+            payload.robotWristRy = lastRobotWristTargetRotation.y;
+            payload.robotWristRz = lastRobotWristTargetRotation.z;
+            payload.robotWristRw = lastRobotWristTargetRotation.w;
             payload.joystickAxisX = joystickState.primary2DAxis.x;
             payload.joystickAxisY = joystickState.primary2DAxis.y;
             payload.joystickTrigger = joystickState.trigger;
             payload.joystickGrip = joystickState.grip;
             payload.joystickPrimaryButton = joystickState.primaryButton;
+
+            HandleRecordingMenuButton(joystickState.menuButton);
+        }
+        else if (sendJoystickWristPose)
+        {
+            wristCommandActive = false;
         }
 
-        inputChannel.Send(JsonUtility.ToJson(payload));
-        recenterHeadsetPoseOnNextSample = false;
+        var payloadJson = JsonUtility.ToJson(payload);
+        if (recordingActive && payload.wristAvailable)
+        {
+            WriteRecordingSample(payloadJson);
+        }
+
+        if (inputChannelOpen && inputChannel != null)
+        {
+            inputChannel.Send(payloadJson);
+            recenterHeadsetPoseOnNextSample = false;
+        }
+    }
+
+    static Vector3 UnityDeltaToRobot(Vector3 unityDelta)
+    {
+        return new Vector3(
+            unityDelta.z,
+            -unityDelta.x,
+            unityDelta.y);
+    }
+
+    static Quaternion UnityRotationDeltaToRobot(Quaternion unityRotation)
+    {
+        var robotRotation = new Quaternion(
+            -unityRotation.z,
+            unityRotation.x,
+            -unityRotation.y,
+            unityRotation.w);
+        TryNormalize(ref robotRotation);
+        return robotRotation;
+    }
+
+    static bool TryNormalize(ref Quaternion rotation)
+    {
+        var normSquared =
+            (rotation.x * rotation.x) +
+            (rotation.y * rotation.y) +
+            (rotation.z * rotation.z) +
+            (rotation.w * rotation.w);
+        if (!float.IsFinite(normSquared) || normSquared < 1e-8f)
+        {
+            return false;
+        }
+
+        var inverseNorm = 1f / Mathf.Sqrt(normSquared);
+        rotation = new Quaternion(
+            rotation.x * inverseNorm,
+            rotation.y * inverseNorm,
+            rotation.z * inverseNorm,
+            rotation.w * inverseNorm);
+        return true;
+    }
+
+    static bool IsFinite(Vector3 value)
+    {
+        return
+            float.IsFinite(value.x) &&
+            float.IsFinite(value.y) &&
+            float.IsFinite(value.z);
     }
 
     void LockDisplayToCamera()
@@ -522,9 +726,14 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             return true;
         }
 
-        var devices = new List<InputDevice>();
-        InputDevices.GetDevicesAtXRNode(wristXrNode, devices);
-        foreach (var device in devices)
+        if (preferOpenVrControllerTracking && OpenVR.System != null)
+        {
+            return TryGetOpenVrWristPose(out wristPose, out joystickState);
+        }
+
+        xrWristDevices.Clear();
+        InputDevices.GetDevicesAtXRNode(wristXrNode, xrWristDevices);
+        foreach (var device in xrWristDevices)
         {
             if (!device.isValid)
             {
@@ -540,17 +749,24 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             device.TryGetFeatureValue(CommonUsages.trigger, out var trigger);
             device.TryGetFeatureValue(CommonUsages.grip, out var grip);
             device.TryGetFeatureValue(CommonUsages.primaryButton, out var primaryButton);
+            device.TryGetFeatureValue(CommonUsages.menuButton, out var menuButton);
 
-            if (!hasPosition && !hasRotation)
+            if (!hasPosition || !hasRotation)
             {
                 continue;
+            }
+
+            if (wristTrackingOrigin != null)
+            {
+                position = wristTrackingOrigin.TransformPoint(position);
+                rotation = wristTrackingOrigin.rotation * rotation;
             }
 
             wristPose = new WristPose
             {
                 source = $"{wristXrNode}:{device.name}",
-                position = hasPosition ? position : Vector3.zero,
-                rotation = hasRotation ? rotation : Quaternion.identity,
+                position = position,
+                rotation = rotation,
             };
             joystickState = new JoystickState
             {
@@ -558,11 +774,289 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
                 trigger = trigger,
                 grip = grip,
                 primaryButton = primaryButton,
+                menuButton = menuButton,
             };
             return true;
         }
 
         return false;
+    }
+
+    bool TryGetOpenVrWristPose(
+        out WristPose wristPose,
+        out JoystickState joystickState)
+    {
+        wristPose = default;
+        joystickState = default;
+
+        var system = OpenVR.System;
+        if (system == null)
+        {
+            return false;
+        }
+
+        var role = wristXrNode == XRNode.LeftHand
+            ? ETrackedControllerRole.LeftHand
+            : ETrackedControllerRole.RightHand;
+        var deviceIndex = system.GetTrackedDeviceIndexForControllerRole(role);
+        if (deviceIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        {
+            return false;
+        }
+
+        var controllerState = new VRControllerState_t();
+        var trackedPose = new TrackedDevicePose_t();
+        var hasControllerState = system.GetControllerStateWithPose(
+            SteamVR_Settings.instance.trackingSpace,
+            deviceIndex,
+            ref controllerState,
+            (uint)Marshal.SizeOf(typeof(VRControllerState_t)),
+            ref trackedPose);
+        if (!hasControllerState ||
+            !trackedPose.bDeviceIsConnected ||
+            !trackedPose.bPoseIsValid)
+        {
+            return false;
+        }
+
+        var trackedTransform =
+            new SteamVR_Utils.RigidTransform(trackedPose.mDeviceToAbsoluteTracking);
+        var position = trackedTransform.pos;
+        var rotation = trackedTransform.rot;
+        if (wristTrackingOrigin != null)
+        {
+            position = wristTrackingOrigin.TransformPoint(position);
+            rotation = wristTrackingOrigin.rotation * rotation;
+        }
+
+        var pressed = controllerState.ulButtonPressed;
+        var menuButton = IsOpenVrButtonPressed(
+            pressed,
+            EVRButtonId.k_EButton_ApplicationMenu);
+        var gripButton = IsOpenVrButtonPressed(
+            pressed,
+            EVRButtonId.k_EButton_Grip);
+
+        lastOpenVrControllerIndex = deviceIndex;
+        wristPose = new WristPose
+        {
+            source = $"OpenVR:{role}:{GetOpenVrDeviceName(system, deviceIndex)}",
+            position = position,
+            rotation = rotation,
+        };
+        joystickState = new JoystickState
+        {
+            primary2DAxis = new Vector2(
+                controllerState.rAxis0.x,
+                controllerState.rAxis0.y),
+            trigger = Mathf.Clamp01(controllerState.rAxis1.x),
+            grip = gripButton ? 1f : 0f,
+            primaryButton = menuButton,
+            menuButton = menuButton,
+        };
+        return true;
+    }
+
+    public void ToggleRecording()
+    {
+        if (recordingActive)
+        {
+            StopRecording();
+        }
+        else
+        {
+            StartRecording();
+        }
+    }
+
+    public void StartRecording()
+    {
+        if (recordingActive)
+        {
+            return;
+        }
+
+        try
+        {
+            var directory = ResolveRecordingDirectory();
+            Directory.CreateDirectory(directory);
+            recordingPath = Path.Combine(
+                directory,
+                $"vive_controller_6dof_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}Z.jsonl");
+            recordingWriter = new StreamWriter(
+                recordingPath,
+                false,
+                new UTF8Encoding(false));
+            recordingSamplesSinceFlush = 0;
+            recordingActive = true;
+            PulseRecordingState(true);
+            Debug.Log($"ViveTeleop 6-DoF recording started: {recordingPath}");
+        }
+        catch (Exception exception)
+        {
+            recordingActive = false;
+            recordingWriter?.Dispose();
+            recordingWriter = null;
+            Debug.LogError(
+                $"ViveTeleop 6-DoF recording could not start: {exception.Message}");
+        }
+    }
+
+    public void StopRecording()
+    {
+        if (!recordingActive && recordingWriter == null)
+        {
+            return;
+        }
+
+        recordingActive = false;
+        try
+        {
+            recordingWriter?.Flush();
+            recordingWriter?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning(
+                $"ViveTeleop 6-DoF recording close failed: {exception.Message}");
+        }
+        finally
+        {
+            recordingWriter = null;
+        }
+
+        PulseRecordingState(false);
+        Debug.Log($"ViveTeleop 6-DoF recording saved: {recordingPath}");
+    }
+
+    void HandleRecordingMenuButton(bool menuButton)
+    {
+        if (toggleRecordingWithMenuButton &&
+            menuButton &&
+            !previousRecordingMenuButton)
+        {
+            ToggleRecording();
+        }
+
+        previousRecordingMenuButton = menuButton;
+    }
+
+    void WriteRecordingSample(string payloadJson)
+    {
+        if (recordingWriter == null)
+        {
+            return;
+        }
+
+        try
+        {
+            recordingWriter.WriteLine(payloadJson);
+            recordingSamplesSinceFlush++;
+            if (recordingSamplesSinceFlush >=
+                Mathf.Max(1, recordingFlushIntervalSamples))
+            {
+                recordingWriter.Flush();
+                recordingSamplesSinceFlush = 0;
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError(
+                $"ViveTeleop 6-DoF recording failed: {exception.Message}");
+            StopRecording();
+        }
+    }
+
+    bool ShouldRecordOnStart()
+    {
+        if (recordControllerPoseOnStart)
+        {
+            return true;
+        }
+
+        var envValue =
+            Environment.GetEnvironmentVariable("VIVE_TELEOP_RECORD_CONTROLLER");
+        if (string.Equals(envValue, "1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(envValue, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var arg in Environment.GetCommandLineArgs())
+        {
+            if (string.Equals(
+                arg,
+                "--record-controller",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    string ResolveRecordingDirectory()
+    {
+        var configuredDirectory =
+            Environment.GetEnvironmentVariable("VIVE_TELEOP_RECORDING_DIR");
+        if (!string.IsNullOrWhiteSpace(configuredDirectory))
+        {
+            return Path.GetFullPath(configuredDirectory);
+        }
+
+        return Path.Combine(
+            Application.persistentDataPath,
+            string.IsNullOrWhiteSpace(recordingFolderName)
+                ? "ViveTeleopRecordings"
+                : recordingFolderName);
+    }
+
+    void PulseRecordingState(bool started)
+    {
+        if (!preferOpenVrControllerTracking)
+        {
+            return;
+        }
+
+        var system = OpenVR.System;
+        if (system == null ||
+            lastOpenVrControllerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        {
+            return;
+        }
+
+        system.TriggerHapticPulse(
+            lastOpenVrControllerIndex,
+            0,
+            started ? (ushort)1800 : (ushort)600);
+    }
+
+    static bool IsOpenVrButtonPressed(ulong pressed, EVRButtonId button)
+    {
+        return (pressed & (1UL << (int)button)) != 0;
+    }
+
+    string GetOpenVrDeviceName(CVRSystem system, uint deviceIndex)
+    {
+        if (openVrDeviceNames.TryGetValue(deviceIndex, out var cachedName))
+        {
+            return cachedName;
+        }
+
+        var error = ETrackedPropertyError.TrackedProp_Success;
+        var buffer = new StringBuilder(128);
+        system.GetStringTrackedDeviceProperty(
+            deviceIndex,
+            ETrackedDeviceProperty.Prop_ModelNumber_String,
+            buffer,
+            (uint)buffer.Capacity,
+            ref error);
+        var deviceName = error == ETrackedPropertyError.TrackedProp_Success
+            ? buffer.ToString()
+            : $"device-{deviceIndex}";
+        openVrDeviceNames[deviceIndex] = deviceName;
+        return deviceName;
     }
 
     void ApplyVideoTexture(Texture texture)
@@ -616,7 +1110,14 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
     void OnDestroy()
     {
+        StopRecording();
         Disconnect();
+        if (poseSampleRoutine != null)
+        {
+            StopCoroutine(poseSampleRoutine);
+            poseSampleRoutine = null;
+        }
+
         if (webRtcUpdateRoutine != null)
         {
             StopCoroutine(webRtcUpdateRoutine);
@@ -659,11 +1160,54 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     }
 
     [Serializable]
+    class RobotStateSnapshot
+    {
+        public bool ready;
+        public RobotWristState wrist;
+    }
+
+    [Serializable]
+    class RobotWristState
+    {
+        public string frame;
+        public JsonVector3 position;
+        public JsonQuaternion orientation;
+    }
+
+    [Serializable]
+    class JsonVector3
+    {
+        public float x;
+        public float y;
+        public float z;
+
+        public Vector3 ToVector3()
+        {
+            return new Vector3(x, y, z);
+        }
+    }
+
+    [Serializable]
+    class JsonQuaternion
+    {
+        public float x;
+        public float y;
+        public float z;
+        public float w;
+
+        public Quaternion ToQuaternion()
+        {
+            return new Quaternion(x, y, z, w);
+        }
+    }
+
+    [Serializable]
     class PosePayload
     {
         public string type;
         public float timestamp;
         public bool hmdAvailable;
+        public string hmdFrame;
         public float hmdPx;
         public float hmdPy;
         public float hmdPz;
@@ -673,7 +1217,9 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public float hmdRw;
         public bool headsetRecenter;
         public bool wristAvailable;
+        public bool wristCommandEnabled;
         public string wristSource;
+        public string wristFrame;
         public float wristPx;
         public float wristPy;
         public float wristPz;
@@ -682,6 +1228,9 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public float wristRz;
         public float wristRw;
         public string robotWristFrame;
+        public float robotWristPx;
+        public float robotWristPy;
+        public float robotWristPz;
         public float robotWristRx;
         public float robotWristRy;
         public float robotWristRz;
@@ -706,5 +1255,6 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public float trigger;
         public float grip;
         public bool primaryButton;
+        public bool menuButton;
     }
 }

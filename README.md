@@ -251,32 +251,56 @@ For browser debugging:
 6. Click `Input`. The page first displays the current robot head, wrist, and gripper values from `/robot_state`, then connects to `/input_offer` and streams smoothly from that safe starting state at 20 Hz.
 7. Adjust `Opening` between `0` and `1`, or click `Open` or `Close`. The measured left and right finger positions are read-only values captured when input connects.
 
-For Unity:
+For Unity on Linux:
 
-1. Start the containers.
-2. Launch Unity and open `unity-vr-headset`.
-3. Open `Assets/Scenes/SampleScene.unity`.
-4. Select `Quad` and set `Vive Teleop Web RTC Client > Config Url` to `http://<host-ip>:8088/config` if Unity is not running on the Docker host.
-5. Launch SteamVR.
-6. Press Play.
+1. Install Unity `6000.3.17f1` for Linux with Linux Build Support (x86-64).
+2. Install SteamVR and verify the Vive Pro / Vive Pro 2 headset, base stations, and controllers are visible in SteamVR.
+3. Run `./scripts/check-unity-vr-linux.sh`.
+4. Start the containers and launch SteamVR.
+5. Launch Unity and open `unity-vr-headset`.
+6. Open `Assets/Scenes/SampleScene.unity`.
+7. Select `Quad` and set `Vive Teleop Web RTC Client > Config Url` to `http://<host-ip>:8088/config` if Unity is not running on the Docker host.
+8. Press Play.
 
 The Unity scene includes `ViveTeleopWebRtcClient` on the video quad. The quad is parented to the XR camera and kept centered in front of the headset, so it stays visible in a Vive Pro / Vive Pro 2 view. The component fetches `/config`, connects video through `/offer`, opens an input data channel through `/input_offer`, renders the received video onto the quad material, and sends teleop JSON over the data channel.
 
 By default the input payload includes:
 
 - HMD pose from the main camera.
-- Right-hand XR controller / 6-DoF joystick wrist pose from `XRNode.RightHand`.
-- A calibrated relative `robotWristR*` quaternion, used in `/vive/hand_target_pose`.
-- Joystick axis, trigger, grip, and primary button values when the device exposes them through Unity XR.
+- Right-hand SteamVR/OpenVR controller 6-DoF pose, with Unity XR as a fallback.
+- A robot wrist target anchored to the live `/robot_state` wrist pose.
+- Trackpad, trigger, grip, and menu-button values.
 
 `joystickGrip` is telemetry only. The current Unity client does not populate `gripperAvailable` or `gripperOpening`, so it does not actuate the robot gripper.
 
-Press `R` in the Unity player to recalibrate the current wrist orientation as neutral. If the joystick is represented by a custom tracked GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`; otherwise the right-hand XR node is used.
+Hold the Vive trigger or side-grip button to command the robot wrist. The controller pose is anchored to the robot's current target when the button is pressed, so engaging control does not jump the arm. Controller forward/right/up motion maps to robot forward/right/up motion. Release the button to freeze the robot target.
+
+Press `R` in the Unity player to re-anchor the current controller pose to the current robot wrist target. If the joystick is represented by a custom tracked GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`; otherwise the right-hand XR node is used.
+
+Press `Space` or the Vive controller menu button to start or stop local 6-DoF recording. Each line in the output `.jsonl` file is the same `unity_teleop_pose` JSON object sent over WebRTC, including wrist XYZ, quaternion, calibrated robot quaternion, and controller values. On Linux, recordings default to:
+
+```text
+~/.config/unity3d/DefaultCompany/unity-vr-headset/ViveTeleopRecordings/
+```
+
+Recording can also be controlled at startup:
+
+```bash
+VIVE_TELEOP_RECORD_CONTROLLER=1 \
+VIVE_TELEOP_RECORDING_DIR="$PWD/recordings" \
+./unity-vr-headset/Builds/Linux/vive-teleop.x86_64
+```
 
 Builds can override the scene URL with either `VIVE_TELEOP_WEBRTC_CONFIG_URL` or a command-line argument:
 
 ```bash
 --webrtc-config-url=http://<host-ip>:8088/config
+```
+
+Build a Linux player after closing the project in the Unity editor:
+
+```bash
+./scripts/build-unity-vr-linux.sh
 ```
 
 ## Troubleshooting

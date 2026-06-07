@@ -86,12 +86,23 @@ class WebRtcInputPublisher(Node):
         self._head_pose_publisher.publish(message)
 
     def _publish_hand_target(self, data: dict[str, Any]) -> None:
-        if not data.get("wristAvailable"):
+        if (
+            not data.get("wristAvailable")
+            or data.get("wristCommandEnabled") is False
+        ):
             return
 
+        position_prefix = (
+            "robotWristP"
+            if all(
+                f"robotWristP{axis}" in data
+                for axis in ("x", "y", "z")
+            )
+            else "wristP"
+        )
         message = self._extract_pose(
             data,
-            position_prefix="wristP",
+            position_prefix=position_prefix,
             quaternion_prefix="robotWristR",
             frame_id=str(data.get("robotWristFrame") or "unity_world"),
             warning_context="hand target pose",
