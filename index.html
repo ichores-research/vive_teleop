@@ -202,7 +202,7 @@
 
         .workspace {
             display: grid;
-            grid-template-columns: minmax(320px, 1fr) minmax(280px, 380px);
+            grid-template-columns: minmax(320px, 1fr) minmax(360px, 480px);
             min-height: 0;
         }
 
@@ -227,7 +227,7 @@
 
         aside {
             display: grid;
-            grid-template-rows: auto 1fr auto;
+            grid-template-rows: auto 1fr;
             gap: 12px;
             min-width: 0;
             border-left: 1px solid var(--border);
@@ -245,6 +245,48 @@
             display: grid;
             gap: 8px;
             align-content: start;
+        }
+
+        .input-panels {
+            display: grid;
+            gap: 12px;
+            min-height: 0;
+            overflow: auto;
+            padding-right: 2px;
+        }
+
+        .input-panel {
+            display: grid;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel-2);
+        }
+
+        .input-panel h3 {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .field-grid.three {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .field-grid.two {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .field-grid input {
+            height: 34px;
+            padding: 6px 8px;
         }
 
         .log-panel {
@@ -288,6 +330,12 @@
             aside {
                 border-left: 0;
                 border-top: 1px solid var(--border);
+            }
+
+            .field-grid,
+            .field-grid.three,
+            .field-grid.two {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
             video {
@@ -334,7 +382,7 @@
             </label>
             <div class="button-row">
                 <label class="relay-toggle">
-                    <input id="relayOnly" type="checkbox" checked>
+                    <input id="relayOnly" type="checkbox">
                     Relay only
                 </label>
                 <button id="startVideoBtn">Start Video</button>
@@ -349,12 +397,95 @@
             </div>
 
             <aside>
-                <h2>Input Payload</h2>
-                <textarea id="inputPayload" spellcheck="false">{"type":"debug","x":0,"y":0,"z":0}</textarea>
-                <div class="quick-inputs">
-                    <button id="sendInputBtn" disabled>Send Payload</button>
-                    <button id="sendPoseBtn" class="secondary" disabled>Send Pose</button>
-                    <button id="sendStopBtn" class="secondary" disabled>Send Stop</button>
+                <h2>Input</h2>
+                <div class="input-panels">
+                    <section class="input-panel">
+                        <h3>Head</h3>
+                        <label>
+                            Frame
+                            <input id="headFrame" value="unity_world" spellcheck="false">
+                        </label>
+                        <div class="field-grid three">
+                            <label>X <input id="headPx" type="number" step="0.01" value="0"></label>
+                            <label>Y <input id="headPy" type="number" step="0.01" value="1.4"></label>
+                            <label>Z <input id="headPz" type="number" step="0.01" value="0"></label>
+                        </div>
+                        <div class="field-grid two">
+                            <label>Pan (rad) <input id="headPan" type="number" step="0.01" value="0"></label>
+                            <label>Tilt (rad) <input id="headTilt" type="number" step="0.01" value="0"></label>
+                        </div>
+                        <div class="field-grid">
+                            <label>QX <input id="headRx" type="number" step="0.01" value="0"></label>
+                            <label>QY <input id="headRy" type="number" step="0.01" value="0"></label>
+                            <label>QZ <input id="headRz" type="number" step="0.01" value="0"></label>
+                            <label>QW <input id="headRw" type="number" step="0.01" value="1"></label>
+                        </div>
+                        <div class="quick-inputs">
+                            <button id="sendHeadBtn" disabled>Send Head</button>
+                        </div>
+                    </section>
+
+                    <section class="input-panel">
+                        <h3>Wrist</h3>
+                        <div class="field-grid two">
+                            <label>
+                                Wrist Frame
+                                <input id="wristFrame" value="unity_world" spellcheck="false">
+                            </label>
+                            <label>
+                                Robot Frame
+                                <input id="robotWristFrame" value="base_footprint" spellcheck="false">
+                            </label>
+                        </div>
+                        <div class="field-grid three">
+                            <label>X <input id="wristPx" type="number" step="0.01" value="0.45"></label>
+                            <label>Y <input id="wristPy" type="number" step="0.01" value="0"></label>
+                            <label>Z <input id="wristPz" type="number" step="0.01" value="0.9"></label>
+                        </div>
+                        <div class="field-grid">
+                            <label>QX <input id="wristRx" type="number" step="0.01" value="0"></label>
+                            <label>QY <input id="wristRy" type="number" step="0.01" value="0"></label>
+                            <label>QZ <input id="wristRz" type="number" step="0.01" value="0"></label>
+                            <label>QW <input id="wristRw" type="number" step="0.01" value="1"></label>
+                        </div>
+                        <div class="field-grid">
+                            <label>RQX <input id="robotWristRx" type="number" step="0.01" value="0"></label>
+                            <label>RQY <input id="robotWristRy" type="number" step="0.01" value="0"></label>
+                            <label>RQZ <input id="robotWristRz" type="number" step="0.01" value="0"></label>
+                            <label>RQW <input id="robotWristRw" type="number" step="0.01" value="1"></label>
+                        </div>
+                        <div class="field-grid two">
+                            <label>Joy X <input id="joystickAxisX" type="number" step="0.01" value="0"></label>
+                            <label>Joy Y <input id="joystickAxisY" type="number" step="0.01" value="0"></label>
+                        </div>
+                        <div class="quick-inputs">
+                            <button id="sendWristBtn" disabled>Send Wrist</button>
+                            <button id="sendCombinedBtn" class="secondary" disabled>Send All</button>
+                        </div>
+                    </section>
+
+                    <section class="input-panel">
+                        <h3>Gripper</h3>
+                        <label>
+                            Opening (0 closed, 1 open)
+                            <input id="gripperOpening" type="number" min="0" max="1" step="0.01" value="0">
+                        </label>
+                        <div class="field-grid two">
+                            <label>
+                                Left position (m)
+                                <input id="gripperLeftPosition" type="number" readonly>
+                            </label>
+                            <label>
+                                Right position (m)
+                                <input id="gripperRightPosition" type="number" readonly>
+                            </label>
+                        </div>
+                        <div class="quick-inputs">
+                            <button id="openGripperBtn" class="secondary" type="button">Open</button>
+                            <button id="closeGripperBtn" class="secondary" type="button">Close</button>
+                            <button id="sendGripperBtn" disabled>Send Gripper</button>
+                        </div>
+                    </section>
                 </div>
             </aside>
         </section>
@@ -377,31 +508,76 @@
         const disconnectBtn = document.getElementById('disconnectBtn');
         const hostServerBtn = document.getElementById('hostServerBtn');
         const containerServerBtn = document.getElementById('containerServerBtn');
-        const sendInputBtn = document.getElementById('sendInputBtn');
-        const sendPoseBtn = document.getElementById('sendPoseBtn');
-        const sendStopBtn = document.getElementById('sendStopBtn');
+        const sendHeadBtn = document.getElementById('sendHeadBtn');
+        const sendWristBtn = document.getElementById('sendWristBtn');
+        const sendGripperBtn = document.getElementById('sendGripperBtn');
+        const sendCombinedBtn = document.getElementById('sendCombinedBtn');
+        const openGripperBtn = document.getElementById('openGripperBtn');
+        const closeGripperBtn = document.getElementById('closeGripperBtn');
+        const gripperLeftPositionEl = document.getElementById('gripperLeftPosition');
+        const gripperRightPositionEl = document.getElementById('gripperRightPosition');
         const clearLogBtn = document.getElementById('clearLogBtn');
-        const inputPayloadEl = document.getElementById('inputPayload');
         const videoEl = document.getElementById('videoStream');
         const videoStatusEl = document.getElementById('videoStatus');
         const inputStatusEl = document.getElementById('inputStatus');
         const logEl = document.getElementById('log');
+        const inputControls = {
+            headFrame: document.getElementById('headFrame'),
+            headPx: document.getElementById('headPx'),
+            headPy: document.getElementById('headPy'),
+            headPz: document.getElementById('headPz'),
+            headPan: document.getElementById('headPan'),
+            headTilt: document.getElementById('headTilt'),
+            headRx: document.getElementById('headRx'),
+            headRy: document.getElementById('headRy'),
+            headRz: document.getElementById('headRz'),
+            headRw: document.getElementById('headRw'),
+            wristFrame: document.getElementById('wristFrame'),
+            robotWristFrame: document.getElementById('robotWristFrame'),
+            wristPx: document.getElementById('wristPx'),
+            wristPy: document.getElementById('wristPy'),
+            wristPz: document.getElementById('wristPz'),
+            wristRx: document.getElementById('wristRx'),
+            wristRy: document.getElementById('wristRy'),
+            wristRz: document.getElementById('wristRz'),
+            wristRw: document.getElementById('wristRw'),
+            robotWristRx: document.getElementById('robotWristRx'),
+            robotWristRy: document.getElementById('robotWristRy'),
+            robotWristRz: document.getElementById('robotWristRz'),
+            robotWristRw: document.getElementById('robotWristRw'),
+            joystickAxisX: document.getElementById('joystickAxisX'),
+            joystickAxisY: document.getElementById('joystickAxisY'),
+            gripperOpening: document.getElementById('gripperOpening'),
+        };
+        const INPUT_STREAM_INTERVAL_MS = 50;
+        const INPUT_POSITION_BLEND = 0.3;
+        const INPUT_ORIENTATION_BLEND = 0.25;
 
         let videoPc = null;
         let inputPc = null;
         let inputChannel = null;
+        let inputStreamTimer = null;
+        let inputStreamState = null;
+        let inputTargetState = null;
+        let inputConnecting = false;
+        let headPanSign = -1;
+        let headTiltSign = -1;
 
         const params = new URLSearchParams(window.location.search);
+        const serverParamProvided = params.has('server');
+        const turnParamProvided = params.has('turn');
         serverUrlEl.value = hostServerUrl();
         turnUrlEl.value = hostTurnUrls();
 
-        if (params.has('server')) {
+        if (serverParamProvided) {
             serverUrlEl.value = params.get('server');
         }
 
-        if (params.has('turn')) {
+        if (turnParamProvided) {
             turnUrlEl.value = params.get('turn');
         }
+
+        const configLoadPromise = loadServerConfig();
 
         function setStatus(element, text, tone) {
             element.textContent = text;
@@ -418,6 +594,41 @@
 
         function endpoint(path) {
             return `${serverUrlEl.value.replace(/\/+$/, '')}${path}`;
+        }
+
+        async function loadServerConfig() {
+            try {
+                const response = await fetch(endpoint('/config'));
+                if (!response.ok) {
+                    return;
+                }
+
+                const config = await response.json();
+                if (!serverParamProvided && config.serverUrl) {
+                    serverUrlEl.value = config.serverUrl;
+                }
+
+                if (!turnParamProvided && Array.isArray(config.iceServers)) {
+                    const urls = [];
+                    for (const iceServer of config.iceServers) {
+                        if (!iceServer || !iceServer.urls) {
+                            continue;
+                        }
+                        if (Array.isArray(iceServer.urls)) {
+                            urls.push(...iceServer.urls);
+                        } else {
+                            urls.push(iceServer.urls);
+                        }
+                    }
+                    if (urls.length) {
+                        turnUrlEl.value = urls.join(',');
+                    }
+                }
+
+                log(`Loaded WebRTC config from ${endpoint('/config')}`);
+            } catch (error) {
+                log(`Could not load WebRTC config: ${error.message}`);
+            }
         }
 
         function hostServerUrl() {
@@ -476,11 +687,159 @@
         function updateButtons() {
             const inputOpen = inputChannel && inputChannel.readyState === 'open';
             startVideoBtn.disabled = Boolean(videoPc);
-            connectInputBtn.disabled = Boolean(inputPc);
+            connectInputBtn.disabled = Boolean(inputPc) || inputConnecting;
             disconnectBtn.disabled = !videoPc && !inputPc;
-            sendInputBtn.disabled = !inputOpen;
-            sendPoseBtn.disabled = !inputOpen;
-            sendStopBtn.disabled = !inputOpen;
+            sendHeadBtn.disabled = !inputOpen;
+            sendWristBtn.disabled = !inputOpen;
+            sendGripperBtn.disabled = !inputOpen;
+            sendCombinedBtn.disabled = !inputOpen;
+        }
+
+        function captureInputState() {
+            const state = {};
+            for (const [id, element] of Object.entries(inputControls)) {
+                if (element.type === 'number') {
+                    state[id] = numberValue(id);
+                } else {
+                    state[id] = element.value;
+                }
+            }
+            return state;
+        }
+
+        function renderInputState(state) {
+            for (const [id, value] of Object.entries(state)) {
+                const element = inputControls[id];
+                if (!element) {
+                    continue;
+                }
+                element.value = value;
+            }
+        }
+
+        function setupInputStateSync() {
+            for (const [id, element] of Object.entries(inputControls)) {
+                element.addEventListener('input', () => {
+                    if (!inputTargetState) {
+                        if (id === 'headPan' || id === 'headTilt') {
+                            syncHeadQuaternionFromJoints();
+                        }
+                        return;
+                    }
+                    inputTargetState[id] =
+                        element.type === 'number' ? numberValue(id) : element.value;
+                    if (id === 'headPan' || id === 'headTilt') {
+                        syncHeadQuaternionFromJoints(inputTargetState);
+                    }
+                });
+            }
+        }
+
+        function blendNumber(current, target, alpha) {
+            return current + ((target - current) * alpha);
+        }
+
+        function blendQuaternion(state, target, prefix, alpha) {
+            const keys = ['x', 'y', 'z', 'w'].map((axis) => `${prefix}${axis}`);
+            const current = keys.map((key) => Number(state[key]));
+            let desired = keys.map((key) => Number(target[key]));
+            const dot = current.reduce(
+                (sum, value, index) => sum + (value * desired[index]),
+                0,
+            );
+            if (dot < 0) {
+                desired = desired.map((value) => -value);
+            }
+
+            const blended = current.map(
+                (value, index) => blendNumber(value, desired[index], alpha),
+            );
+            const norm = Math.hypot(...blended);
+            if (norm < 1e-9) {
+                return;
+            }
+            keys.forEach((key, index) => {
+                state[key] = blended[index] / norm;
+            });
+        }
+
+        function advanceInputStreamState() {
+            if (!inputStreamState || !inputTargetState) {
+                return;
+            }
+
+            for (const id of ['headPan', 'headTilt']) {
+                inputStreamState[id] = blendNumber(
+                    Number(inputStreamState[id]),
+                    Number(inputTargetState[id]),
+                    INPUT_POSITION_BLEND,
+                );
+            }
+            syncHeadQuaternionFromJoints(inputStreamState);
+
+            for (const id of ['wristPx', 'wristPy', 'wristPz']) {
+                inputStreamState[id] = blendNumber(
+                    Number(inputStreamState[id]),
+                    Number(inputTargetState[id]),
+                    INPUT_POSITION_BLEND,
+                );
+            }
+            blendQuaternion(
+                inputStreamState,
+                inputTargetState,
+                'robotWristR',
+                INPUT_ORIENTATION_BLEND,
+            );
+            blendQuaternion(
+                inputStreamState,
+                inputTargetState,
+                'wristR',
+                INPUT_ORIENTATION_BLEND,
+            );
+
+            for (const id of ['joystickAxisX', 'joystickAxisY']) {
+                inputStreamState[id] = blendNumber(
+                    Number(inputStreamState[id]),
+                    Number(inputTargetState[id]),
+                    INPUT_POSITION_BLEND,
+                );
+            }
+
+            inputStreamState.gripperOpening = blendNumber(
+                Number(inputStreamState.gripperOpening),
+                Number(inputTargetState.gripperOpening),
+                INPUT_POSITION_BLEND,
+            );
+
+            for (const id of ['headFrame', 'wristFrame', 'robotWristFrame']) {
+                inputStreamState[id] = inputTargetState[id];
+            }
+        }
+
+        function syncHeadQuaternionFromJoints(state = null) {
+            const pan = numberValue('headPan', state);
+            const tilt = numberValue('headTilt', state);
+            const inputPan = Math.abs(headPanSign) > 1e-9 ? pan / headPanSign : pan;
+            const inputTilt = Math.abs(headTiltSign) > 1e-9 ? tilt / headTiltSign : tilt;
+            const halfPan = inputPan * 0.5;
+            const halfTilt = inputTilt * 0.5;
+            const cosPan = Math.cos(halfPan);
+            const sinPan = Math.sin(halfPan);
+            const cosTilt = Math.cos(halfTilt);
+            const sinTilt = Math.sin(halfTilt);
+            const quaternion = {
+                headRx: cosPan * sinTilt,
+                headRy: sinPan * cosTilt,
+                headRz: -sinPan * sinTilt,
+                headRw: cosPan * cosTilt,
+            };
+
+            for (const [id, value] of Object.entries(quaternion)) {
+                inputControls[id].value = value;
+                if (state) {
+                    state[id] = value;
+                }
+            }
         }
 
         function waitForIceGathering(pc) {
@@ -508,6 +867,8 @@
         }
 
         async function exchangeOffer(pc, path) {
+            await configLoadPromise;
+
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             await waitForIceGathering(pc);
@@ -581,6 +942,22 @@
         }
 
         async function connectInput() {
+            inputConnecting = true;
+            setStatus(inputStatusEl, 'Input: reading robot', 'warn');
+            updateButtons();
+
+            try {
+                await configLoadPromise;
+                const snapshot = await loadRobotInputState();
+                renderRobotInputState(snapshot);
+            } catch (error) {
+                log(`Robot input state error: ${error.message}`);
+                setStatus(inputStatusEl, 'Input: robot state error', 'error');
+                inputConnecting = false;
+                updateButtons();
+                return;
+            }
+
             inputPc = new RTCPeerConnection(peerConfig());
             attachStateLogging(inputPc, 'Input', inputStatusEl);
             inputChannel = inputPc.createDataChannel('input');
@@ -590,12 +967,14 @@
             inputChannel.addEventListener('open', () => {
                 setStatus(inputStatusEl, 'Input: open', 'ok');
                 log('Input data channel open');
+                startInputStream();
                 updateButtons();
             });
 
             inputChannel.addEventListener('close', () => {
                 setStatus(inputStatusEl, 'Input: closed');
                 log('Input data channel closed');
+                stopInputStream();
                 updateButtons();
             });
 
@@ -614,18 +993,253 @@
                 setStatus(inputStatusEl, 'Input: error', 'error');
                 await closeInput();
             } finally {
+                inputConnecting = false;
                 updateButtons();
             }
         }
 
-        function sendInput(payload) {
+        async function loadRobotInputState() {
+            let lastError = null;
+
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+                try {
+                    const response = await fetch(endpoint('/robot_state'), {
+                        cache: 'no-store',
+                    });
+                    if (!response.ok) {
+                        throw new Error(`/robot_state HTTP ${response.status}`);
+                    }
+
+                    const snapshot = await response.json();
+                    if (
+                        snapshot.ready &&
+                        snapshot.head &&
+                        snapshot.wrist &&
+                        snapshot.gripper
+                    ) {
+                        return snapshot;
+                    }
+
+                    const details = Array.isArray(snapshot.errors)
+                        ? snapshot.errors.join('; ')
+                        : 'Robot pose is not ready';
+                    lastError = new Error(details);
+                } catch (error) {
+                    lastError = error;
+                }
+
+                await new Promise((resolve) => window.setTimeout(resolve, 250));
+            }
+
+            throw lastError || new Error('Robot pose is not ready');
+        }
+
+        function renderRobotInputState(snapshot) {
+            const head = snapshot.head;
+            const wrist = snapshot.wrist;
+            const gripper = snapshot.gripper;
+            const headOrientation = head.orientation;
+            const wristOrientation = wrist.orientation;
+            headPanSign = head.panSign;
+            headTiltSign = head.tiltSign;
+            const state = {
+                headFrame: head.frame,
+                headPx: head.position.x,
+                headPy: head.position.y,
+                headPz: head.position.z,
+                headPan: head.pan,
+                headTilt: head.tilt,
+                headRx: headOrientation.x,
+                headRy: headOrientation.y,
+                headRz: headOrientation.z,
+                headRw: headOrientation.w,
+                wristFrame: wrist.frame,
+                robotWristFrame: wrist.frame,
+                wristPx: wrist.position.x,
+                wristPy: wrist.position.y,
+                wristPz: wrist.position.z,
+                wristRx: wristOrientation.x,
+                wristRy: wristOrientation.y,
+                wristRz: wristOrientation.z,
+                wristRw: wristOrientation.w,
+                robotWristRx: wristOrientation.x,
+                robotWristRy: wristOrientation.y,
+                robotWristRz: wristOrientation.z,
+                robotWristRw: wristOrientation.w,
+                joystickAxisX: 0,
+                joystickAxisY: 0,
+                gripperOpening: gripper.opening,
+            };
+
+            renderInputState(state);
+            gripperLeftPositionEl.value = gripper.leftPosition;
+            gripperRightPositionEl.value = gripper.rightPosition;
+            inputStreamState = null;
+            inputTargetState = null;
+            log(
+                `Loaded robot input state: head pan=${head.pan.toFixed(4)}, ` +
+                `tilt=${head.tilt.toFixed(4)}; wrist ` +
+                `xyz=(${wrist.position.x.toFixed(4)}, ` +
+                `${wrist.position.y.toFixed(4)}, ${wrist.position.z.toFixed(4)}); ` +
+                `gripper opening=${gripper.opening.toFixed(3)}`
+            );
+        }
+
+        function sendInput(payload, options = {}) {
             if (!inputChannel || inputChannel.readyState !== 'open') {
-                log('Input data channel is not open');
-                return;
+                if (!options.quiet) {
+                    log('Input data channel is not open');
+                }
+                return false;
             }
 
             inputChannel.send(payload);
-            log(`Sent input: ${payload}`);
+            if (!options.quiet) {
+                log(`Sent input: ${payload}`);
+            }
+            return true;
+        }
+
+        function controlValue(id, state) {
+            if (state && Object.prototype.hasOwnProperty.call(state, id)) {
+                return state[id];
+            }
+            return inputControls[id].value;
+        }
+
+        function numberValue(id, state = null) {
+            const value = Number(controlValue(id, state));
+            return Number.isFinite(value) ? value : 0;
+        }
+
+        function timestampSeconds() {
+            return Date.now() / 1000;
+        }
+
+        function headFields(state = null) {
+            return {
+                hmdAvailable: true,
+                hmdFrame: controlValue('headFrame', state) || 'unity_world',
+                hmdPx: numberValue('headPx', state),
+                hmdPy: numberValue('headPy', state),
+                hmdPz: numberValue('headPz', state),
+                hmdRx: numberValue('headRx', state),
+                hmdRy: numberValue('headRy', state),
+                hmdRz: numberValue('headRz', state),
+                hmdRw: numberValue('headRw', state),
+            };
+        }
+
+        function wristFields(state = null) {
+            return {
+                wristAvailable: true,
+                wristSource: 'debug_page',
+                wristFrame: controlValue('wristFrame', state) || 'unity_world',
+                wristPx: numberValue('wristPx', state),
+                wristPy: numberValue('wristPy', state),
+                wristPz: numberValue('wristPz', state),
+                wristRx: numberValue('wristRx', state),
+                wristRy: numberValue('wristRy', state),
+                wristRz: numberValue('wristRz', state),
+                wristRw: numberValue('wristRw', state),
+                robotWristFrame: controlValue('robotWristFrame', state) || 'base_footprint',
+                robotWristRx: numberValue('robotWristRx', state),
+                robotWristRy: numberValue('robotWristRy', state),
+                robotWristRz: numberValue('robotWristRz', state),
+                robotWristRw: numberValue('robotWristRw', state),
+                joystickAxisX: numberValue('joystickAxisX', state),
+                joystickAxisY: numberValue('joystickAxisY', state),
+                joystickTrigger: 0,
+                joystickGrip: 0,
+                joystickPrimaryButton: false,
+            };
+        }
+
+        function gripperFields(state = null) {
+            return {
+                gripperAvailable: true,
+                gripperOpening: Math.max(
+                    0,
+                    Math.min(1, numberValue('gripperOpening', state)),
+                ),
+            };
+        }
+
+        function buildCombinedPayload(state = null) {
+            return {
+                type: 'unity_teleop_pose',
+                timestamp: timestampSeconds(),
+                ...headFields(state),
+                ...wristFields(state),
+                ...gripperFields(state),
+            };
+        }
+
+        function startInputStream() {
+            stopInputStream();
+            inputTargetState = captureInputState();
+            inputStreamState = { ...inputTargetState };
+            renderInputState(inputTargetState);
+
+            const sendCurrentState = () => {
+                advanceInputStreamState();
+                sendPayloadObject(buildCombinedPayload(inputStreamState), { quiet: true });
+            };
+
+            sendCurrentState();
+            inputStreamTimer = window.setInterval(sendCurrentState, INPUT_STREAM_INTERVAL_MS);
+            log('Input stream started at 20 Hz with target interpolation');
+        }
+
+        function stopInputStream() {
+            if (inputStreamTimer) {
+                window.clearInterval(inputStreamTimer);
+                inputStreamTimer = null;
+            }
+        }
+
+        function sendPayloadObject(payload, options = {}) {
+            sendInput(JSON.stringify(payload), options);
+        }
+
+        function sendHeadPayload() {
+            sendPayloadObject({
+                type: 'browser_head_pose',
+                timestamp: timestampSeconds(),
+                ...headFields(),
+                wristAvailable: false,
+            });
+        }
+
+        function sendWristPayload() {
+            sendPayloadObject({
+                type: 'browser_wrist_target',
+                timestamp: timestampSeconds(),
+                hmdAvailable: false,
+                ...wristFields(),
+            });
+        }
+
+        function sendGripperPayload() {
+            sendPayloadObject({
+                type: 'browser_gripper_target',
+                timestamp: timestampSeconds(),
+                hmdAvailable: false,
+                wristAvailable: false,
+                ...gripperFields(inputTargetState || captureInputState()),
+            });
+        }
+
+        function setGripperOpening(opening) {
+            const clamped = Math.max(0, Math.min(1, opening));
+            inputControls.gripperOpening.value = clamped;
+            if (inputTargetState) {
+                inputTargetState.gripperOpening = clamped;
+            }
+        }
+
+        function sendCombinedPayload() {
+            sendPayloadObject(buildCombinedPayload(inputTargetState || captureInputState()));
         }
 
         async function closeVideo() {
@@ -638,6 +1252,7 @@
         }
 
         async function closeInput() {
+            stopInputStream();
             if (inputChannel) {
                 inputChannel.close();
             }
@@ -646,6 +1261,8 @@
             }
             inputChannel = null;
             inputPc = null;
+            inputStreamState = null;
+            inputTargetState = null;
             setStatus(inputStatusEl, 'Input: idle');
         }
 
@@ -667,23 +1284,18 @@
             serverUrlEl.value = 'http://10.68.0.132:8088';
             log(`Server set to ${serverUrlEl.value}`);
         });
-        sendInputBtn.addEventListener('click', () => sendInput(inputPayloadEl.value));
-        sendPoseBtn.addEventListener('click', () => {
-            sendInput(JSON.stringify({
-                type: 'pose',
-                position: { x: 0.1, y: 1.2, z: -0.3 },
-                rotation: { x: 0, y: 0, z: 0, w: 1 },
-                timestamp: Date.now(),
-            }));
-        });
-        sendStopBtn.addEventListener('click', () => {
-            sendInput(JSON.stringify({ type: 'stop', timestamp: Date.now() }));
-        });
+        sendHeadBtn.addEventListener('click', sendHeadPayload);
+        sendWristBtn.addEventListener('click', sendWristPayload);
+        sendGripperBtn.addEventListener('click', sendGripperPayload);
+        sendCombinedBtn.addEventListener('click', sendCombinedPayload);
+        openGripperBtn.addEventListener('click', () => setGripperOpening(1));
+        closeGripperBtn.addEventListener('click', () => setGripperOpening(0));
         clearLogBtn.addEventListener('click', () => {
             logEl.textContent = '';
         });
         window.addEventListener('beforeunload', disconnectAll);
 
+        setupInputStateSync();
         updateButtons();
         log(`Ready for ${serverUrlEl.value}`);
     </script>

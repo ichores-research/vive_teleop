@@ -6,7 +6,7 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
 
-DEFAULT_IMAGE_TOPIC = "/xtion/rgb/image_raw"
+DEFAULT_IMAGE_TOPIC = "/head_front_camera/rgb/image_raw"
 
 
 class ImageSubscriber(Node):
@@ -20,13 +20,17 @@ class ImageSubscriber(Node):
         self.bridge = CvBridge()
         self._frame_sink = frame_sink
         self._event_loop = event_loop
-        self._image_topic = image_topic
+        self._image_topic = self.declare_parameter(
+            "image_topic",
+            image_topic,
+        ).value
         self._subscription = self.create_subscription(
             Image,
             self._image_topic,
             self.callback,
             rclpy.qos.qos_profile_sensor_data,
         )
+        self.get_logger().info(f"Subscribing to camera topic '{self._image_topic}'")
 
     def callback(self, msg):
         try:

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CycloneDDS xmlns="https://cyclonedds.io/xml">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface address="10.68.0.134"/>
+      </Interfaces>
+      <AllowMulticast>default</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>100</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer Address="10.68.0.1"/>
+        <Peer Address="10.68.0.132"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

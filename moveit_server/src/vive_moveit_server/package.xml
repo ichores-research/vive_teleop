@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>vive_moveit_server</name>
+  <version>0.1.0</version>
+  <description>ROS 2 MoveIt teleoperation server for Vive WebRTC input.</description>
+
+  <maintainer email="mateuszwatly@gmail.com">you</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>moveit_msgs</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>shape_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>trajectory_msgs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>tiago_description</exec_depend>
+  <exec_depend>tiago_moveit_config</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

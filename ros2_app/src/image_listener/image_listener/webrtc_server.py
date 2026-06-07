@@ -100,6 +100,7 @@ def _candidate_summary(sdp: str | None) -> str:
 
 PeerSetupCallback = Callable[[RTCPeerConnection, dict[str, Any]], Any]
 MessageCallback = Callable[[str | bytes], Any]
+JsonCallback = Callable[[], Any]
 
 
 class WebRTCServer:
@@ -164,6 +165,16 @@ class WebRTCServer:
                         asyncio.create_task(result)
 
         self.add_offer_route(path, setup_input_peer)
+
+    def add_json_route(self, path: str, callback: JsonCallback) -> None:
+        async def handle_json(_request: web.Request) -> web.Response:
+            result = callback()
+            if inspect.isawaitable(result):
+                result = await result
+            return web.json_response(result)
+
+        route = self._app.router.add_get(path, handle_json)
+        self._cors.add(route)
 
     def add_offer_route(self, path: str, setup_peer: PeerSetupCallback) -> None:
         route = self._app.router.add_post(

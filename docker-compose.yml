@@ -1,28 +1,4 @@
 services:
-  ros1_bridge:
-    build:
-      context: ./bridge
-      network: host
-    cap_add:
-      - NET_ADMIN
-    command:
-      - /bin/bash
-      - -c
-      - |
-        unset ROS_DISTRO
-        source /opt/ros/noetic/setup.bash
-        export ROS_MASTER_URI=http://10.68.0.1:11311
-        unset ROS_DISTRO
-        source /opt/ros/foxy/setup.bash
-        source /bridge_ws/install/setup.bash
-        exec ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
-    networks:
-      field_net:
-        ipv4_address: 10.68.0.131
-    environment:
-      - ROS_MASTER_URI=http://10.68.0.1:11311
-      - ROS_IP=10.68.0.131
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
   ros2_app:
     build:
       context: ./ros2_app
@@ -40,7 +16,7 @@ services:
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CYCLONEDDS_URI=file:///ros2_ws/cyclonedds.xml
-      - ROS_DOMAIN_ID=0
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-67}
       - PYTHONUNBUFFERED=1
 
     networks:
@@ -54,8 +30,40 @@ services:
       bash -c "
         source /opt/ros/humble/setup.bash &&
         source install/setup.bash &&
-        /wait-for-bridge.sh &&
         ros2 run image_listener image_subscriber
+      "
+
+  moveit_server:
+    build:
+      context: ./moveit_server
+      network: host
+
+    container_name: moveit_server
+
+    depends_on:
+      - ros2_app
+
+    volumes:
+      - ./moveit_server/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
+      - ./moveit_server/src/vive_moveit_server:/moveit_ws/src/vive_moveit_server
+
+    working_dir: /moveit_ws
+
+    restart: on-failure
+
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///moveit_ws/cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-67}
+      - PYTHONUNBUFFERED=1
+
+    networks:
+      field_net:
+        ipv4_address: 10.68.0.134
+
+    command: >
+      bash -c "
+        ros2 launch vive_moveit_server vive_moveit_server.launch.py ${MOVEIT_SERVER_LAUNCH_ARGS:-}
       "
 
   coturn:
