@@ -4,6 +4,8 @@
 
 The Unity VR client is still the intended headset frontend, but `index.html` can be used as a lightweight browser debug client without launching Unity or SteamVR.
 
+Short head teleoperation demo can be seen in `head-teleop-demo.mp4`. Arm teleop is almost done, but can be previewed now using `index.html`.
+
 ## Architecture
 
 The current system has four main pieces:
