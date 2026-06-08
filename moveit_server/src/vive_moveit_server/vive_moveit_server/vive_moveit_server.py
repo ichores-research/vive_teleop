@@ -22,7 +22,7 @@ from moveit_msgs.msg import (
     PositionConstraint,
     RobotState,
 )
-from moveit_msgs.srv import GetPositionIK
+from moveit_msgs.srv import GetPositionFK, GetPositionIK
 from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Float64
@@ -129,6 +129,69 @@ def _copy_pose_stamped(message: PoseStamped) -> PoseStamped:
     return copy
 
 
+def _multiply_quaternions(left: Quaternion, right: Quaternion) -> Quaternion:
+    result = Quaternion()
+    result.x = (
+        left.w * right.x
+        + left.x * right.w
+        + left.y * right.z
+        - left.z * right.y
+    )
+    result.y = (
+        left.w * right.y
+        - left.x * right.z
+        + left.y * right.w
+        + left.z * right.x
+    )
+    result.z = (
+        left.w * right.z
+        + left.x * right.y
+        - left.y * right.x
+        + left.z * right.w
+    )
+    result.w = (
+        left.w * right.w
+        - left.x * right.x
+        - left.y * right.y
+        - left.z * right.z
+    )
+    _normalize_quaternion(result)
+    return result
+
+
+def _inverse_quaternion(quaternion: Quaternion) -> Quaternion:
+    result = Quaternion()
+    result.x = -quaternion.x
+    result.y = -quaternion.y
+    result.z = -quaternion.z
+    result.w = quaternion.w
+    _normalize_quaternion(result)
+    return result
+
+
+def _interpolate_quaternion(
+    start: Quaternion,
+    target: Quaternion,
+    fraction: float,
+) -> Quaternion:
+    fraction = _clamp(fraction, 0.0, 1.0)
+    dot = (
+        start.x * target.x
+        + start.y * target.y
+        + start.z * target.z
+        + start.w * target.w
+    )
+    target_sign = -1.0 if dot < 0.0 else 1.0
+    result = Quaternion()
+    result.x = start.x + fraction * ((target.x * target_sign) - start.x)
+    result.y = start.y + fraction * ((target.y * target_sign) - start.y)
+    result.z = start.z + fraction * ((target.z * target_sign) - start.z)
+    result.w = start.w + fraction * ((target.w * target_sign) - start.w)
+    if not _normalize_quaternion(result):
+        result.w = 1.0
+    return result
+
+
 class ViveMoveItServer(Node):
     def __init__(self) -> None:
         super().__init__("vive_moveit_server")
@@ -190,6 +253,10 @@ class ViveMoveItServer(Node):
             "ik_service_name",
             "/compute_ik",
         ).value
+        self.fk_service_name = self.declare_parameter(
+            "fk_service_name",
+            "/compute_fk",
+        ).value
 
         self.execution_mode = self.declare_parameter("execution_mode", "moveit").value
         self.async_execution = bool(
@@ -210,6 +277,18 @@ class ViveMoveItServer(Node):
         )
         self.min_plan_interval_sec = float(
             self.declare_parameter("min_plan_interval_sec", 0.25).value
+        )
+        self.hand_target_timeout_sec = float(
+            self.declare_parameter("hand_target_timeout_sec", 0.12).value
+        )
+        self.cartesian_position_step_m = float(
+            self.declare_parameter("cartesian_position_step_m", 0.02).value
+        )
+        self.cartesian_orientation_step_rad = float(
+            self.declare_parameter(
+                "cartesian_orientation_step_rad",
+                0.12,
+            ).value
         )
         self.position_deadband_m = float(
             self.declare_parameter("position_deadband_m", 0.01).value
@@ -377,15 +456,21 @@ class ViveMoveItServer(Node):
         self.last_head_tilt: Optional[float] = None
         self.last_commanded_target: Optional[PoseStamped] = None
         self.last_successful_ik_target: Optional[PoseStamped] = None
+        self.deadman_controller_anchor: Optional[PoseStamped] = None
+        self.deadman_robot_anchor: Optional[PoseStamped] = None
         self.current_joint_positions: Dict[str, float] = {}
         self.last_commanded_joint_positions: Dict[str, float] = {}
         self.last_gripper_target_position: Optional[float] = None
         self.last_plan_started_sec = 0.0
+        self.last_hand_target_received_sec = 0.0
         self.last_ik_request_sec = 0.0
         self.ik_warmup_started_sec = 0.0
         self.current_ik_motion_scale = 1.0
         self.last_log_times: Dict[str, float] = {}
         self.goal_in_flight = False
+        self.fk_request_in_flight = False
+        self.hand_target_active = False
+        self.hand_target_generation = 0
         self.received_head_pose = False
         self.received_hand_target = False
         self.received_joint_state = False
@@ -418,6 +503,7 @@ class ViveMoveItServer(Node):
             self.move_group_action_name,
         )
         self.ik_client = self.create_client(GetPositionIK, self.ik_service_name)
+        self.fk_client = self.create_client(GetPositionFK, self.fk_service_name)
 
         self.create_subscription(
             PoseStamped,
@@ -429,7 +515,7 @@ class ViveMoveItServer(Node):
             PoseStamped,
             hand_target_topic,
             self._on_hand_target,
-            10,
+            1,
         )
         self.create_subscription(
             Float64,
@@ -568,6 +654,23 @@ class ViveMoveItServer(Node):
         )
 
     def _on_hand_target(self, message: PoseStamped) -> None:
+        if not self.hand_target_active:
+            controller_anchor = self._apply_hand_target_adjustments(message)
+            if not _normalize_quaternion(
+                controller_anchor.pose.orientation
+            ):
+                self._warn_throttled(
+                    "invalid_deadman_anchor",
+                    "Ignoring deadman press with invalid controller orientation",
+                    2.0,
+                )
+                return
+
+            self.hand_target_active = True
+            self.deadman_controller_anchor = controller_anchor
+            self.get_logger().info(
+                "Deadman active; anchored controller pose for clutch control"
+            )
         if not self.received_hand_target:
             self.get_logger().info(
                 "Received first hand target input "
@@ -577,7 +680,30 @@ class ViveMoveItServer(Node):
                 f"{message.pose.position.z:.3f})"
             )
             self.received_hand_target = True
-        self.pending_hand_target = message
+        self.pending_hand_target = _copy_pose_stamped(message)
+        self.last_hand_target_received_sec = (
+            self.get_clock().now().nanoseconds / 1e9
+        )
+
+    def _reset_hand_target_pursuit(self) -> None:
+        self.pending_hand_target = None
+        self.last_commanded_target = None
+        self.last_successful_ik_target = None
+        self.deadman_controller_anchor = None
+        self.deadman_robot_anchor = None
+        self.last_commanded_joint_positions.clear()
+        self.last_plan_started_sec = 0.0
+        self.last_hand_target_received_sec = 0.0
+        self.last_ik_request_sec = 0.0
+        self.ik_warmup_started_sec = 0.0
+        self.current_ik_motion_scale = 1.0
+        self.goal_in_flight = False
+        self.fk_request_in_flight = False
+        self.hand_target_active = False
+        self.hand_target_generation += 1
+        self.get_logger().info(
+            "Deadman inactive; cleared hand-target pursuit state"
+        )
 
     def _on_joint_state(self, message: JointState) -> None:
         if not self.received_joint_state:
@@ -667,18 +793,31 @@ class ViveMoveItServer(Node):
         self.last_gripper_target_position = target_position
 
     def _maybe_send_latest_target(self) -> None:
-        if self.goal_in_flight or self.pending_hand_target is None:
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        if (
+            self.hand_target_active
+            and self.hand_target_timeout_sec > 0.0
+            and now_sec - self.last_hand_target_received_sec
+            > self.hand_target_timeout_sec
+        ):
+            self._reset_hand_target_pursuit()
             return
 
-        now_sec = self.get_clock().now().nanoseconds / 1e9
+        if (
+            not self.hand_target_active
+            or self.goal_in_flight
+            or self.pending_hand_target is None
+        ):
+            return
+
         if now_sec - self.last_plan_started_sec < self.min_plan_interval_sec:
             return
 
-        target = self._apply_hand_target_adjustments(self.pending_hand_target)
-        if self.pose_reference_frame:
-            target.header.frame_id = self.pose_reference_frame
+        controller_pose = self._apply_hand_target_adjustments(
+            self.pending_hand_target
+        )
 
-        if not _normalize_quaternion(target.pose.orientation):
+        if not _normalize_quaternion(controller_pose.pose.orientation):
             self._warn_throttled(
                 "invalid_quaternion",
                 "Ignoring hand target with invalid orientation quaternion",
@@ -687,7 +826,15 @@ class ViveMoveItServer(Node):
             self.pending_hand_target = None
             return
 
-        if not self._inside_hand_workspace(target):
+        if self.deadman_robot_anchor is None:
+            self._request_current_end_effector_pose()
+            return
+
+        target = self._map_controller_delta_to_robot(controller_pose)
+        if self.pose_reference_frame:
+            target.header.frame_id = self.pose_reference_frame
+
+        if not self._constrain_hand_target_to_workspace(target):
             self.pending_hand_target = None
             return
 
@@ -752,14 +899,162 @@ class ViveMoveItServer(Node):
 
         self.current_ik_motion_scale = self._update_ik_warmup(now_sec)
 
-        request = self._build_ik_request(target)
+        stepped_target = self._step_toward_hand_target(target)
+        request = self._build_ik_request(stepped_target)
         self.goal_in_flight = True
         self.last_plan_started_sec = now_sec
-        self.pending_hand_target = None
+        generation = self.hand_target_generation
         future = self.ik_client.call_async(request)
         future.add_done_callback(
-            lambda result: self._on_ik_result(result, target, retry_count=0)
+            lambda result: self._on_ik_result(
+                result,
+                stepped_target,
+                retry_count=0,
+                generation=generation,
+            )
         )
+
+    def _request_current_end_effector_pose(self) -> None:
+        if self.fk_request_in_flight:
+            return
+        if not self.fk_client.wait_for_service(
+            timeout_sec=self.wait_for_move_group_timeout_sec
+        ):
+            self._warn_throttled(
+                "fk_service_wait",
+                f"Waiting for MoveIt FK service '{self.fk_service_name}'",
+                5.0,
+            )
+            return
+
+        request = GetPositionFK.Request()
+        request.header.frame_id = self.pose_reference_frame
+        request.fk_link_names = [self.end_effector_link]
+        request.robot_state = self._build_current_robot_state()
+        self.fk_request_in_flight = True
+        self.goal_in_flight = True
+        generation = self.hand_target_generation
+        future = self.fk_client.call_async(request)
+        future.add_done_callback(
+            lambda result: self._on_current_end_effector_pose(
+                result,
+                generation,
+            )
+        )
+
+    def _on_current_end_effector_pose(
+        self,
+        future: Future,
+        generation: int,
+    ) -> None:
+        if (
+            generation != self.hand_target_generation
+            or not self.hand_target_active
+        ):
+            return
+
+        self.fk_request_in_flight = False
+        self.goal_in_flight = False
+        try:
+            response = future.result()
+        except Exception as error:
+            self.get_logger().warn(f"MoveIt FK request failed: {error}")
+            return
+
+        if (
+            response.error_code.val != MoveItErrorCodes.SUCCESS
+            or not response.pose_stamped
+        ):
+            self._warn_throttled(
+                "fk_error",
+                "MoveIt could not provide the current wrist pose for IK startup",
+                2.0,
+            )
+            return
+
+        current_pose = _copy_pose_stamped(response.pose_stamped[0])
+        if not _normalize_quaternion(current_pose.pose.orientation):
+            self._warn_throttled(
+                "fk_quaternion",
+                "MoveIt FK returned an invalid wrist orientation",
+                2.0,
+            )
+            return
+
+        self.last_successful_ik_target = current_pose
+        self.deadman_robot_anchor = _copy_pose_stamped(current_pose)
+        self.last_commanded_target = _copy_pose_stamped(current_pose)
+        self.get_logger().info(
+            "Deadman clutch anchored to the current robot wrist pose"
+        )
+
+    def _map_controller_delta_to_robot(
+        self,
+        controller_pose: PoseStamped,
+    ) -> PoseStamped:
+        controller_anchor = self.deadman_controller_anchor
+        robot_anchor = self.deadman_robot_anchor
+        if controller_anchor is None or robot_anchor is None:
+            return _copy_pose_stamped(controller_pose)
+
+        target = _copy_pose_stamped(robot_anchor)
+        target.header.stamp = controller_pose.header.stamp
+        target.pose.position.x += (
+            controller_pose.pose.position.x
+            - controller_anchor.pose.position.x
+        )
+        target.pose.position.y += (
+            controller_pose.pose.position.y
+            - controller_anchor.pose.position.y
+        )
+        target.pose.position.z += (
+            controller_pose.pose.position.z
+            - controller_anchor.pose.position.z
+        )
+
+        controller_delta = _multiply_quaternions(
+            controller_pose.pose.orientation,
+            _inverse_quaternion(controller_anchor.pose.orientation),
+        )
+        target.pose.orientation = _multiply_quaternions(
+            controller_delta,
+            robot_anchor.pose.orientation,
+        )
+        return target
+
+    def _step_toward_hand_target(self, target: PoseStamped) -> PoseStamped:
+        start = self.last_successful_ik_target
+        if start is None:
+            return _copy_pose_stamped(target)
+
+        stepped = _copy_pose_stamped(target)
+        distance_m = _position_distance(start, target)
+        max_position_step = max(0.0, self.cartesian_position_step_m)
+        if max_position_step > 0.0 and distance_m > max_position_step:
+            fraction = max_position_step / distance_m
+            stepped.pose.position.x = start.pose.position.x + fraction * (
+                target.pose.position.x - start.pose.position.x
+            )
+            stepped.pose.position.y = start.pose.position.y + fraction * (
+                target.pose.position.y - start.pose.position.y
+            )
+            stepped.pose.position.z = start.pose.position.z + fraction * (
+                target.pose.position.z - start.pose.position.z
+            )
+
+        orientation_distance = _orientation_distance(start, target)
+        max_orientation_step = max(0.0, self.cartesian_orientation_step_rad)
+        if (
+            max_orientation_step > 0.0
+            and orientation_distance > max_orientation_step
+        ):
+            stepped.pose.orientation = _interpolate_quaternion(
+                start.pose.orientation,
+                target.pose.orientation,
+                max_orientation_step / orientation_distance,
+            )
+
+        return stepped
 
     def _build_ik_request(self, target: PoseStamped) -> GetPositionIK.Request:
         request = GetPositionIK.Request()
@@ -817,9 +1112,7 @@ class ViveMoveItServer(Node):
         return list(self.arm_joint_names)
 
     def _apply_hand_target_adjustments(self, message: PoseStamped) -> PoseStamped:
-        target = PoseStamped()
-        target.header = message.header
-        target.pose = message.pose
+        target = _copy_pose_stamped(message)
         target.pose.position.x = (
             target.pose.position.x * self.hand_position_scale[0]
         ) + self.hand_position_offset[0]
@@ -842,37 +1135,64 @@ class ViveMoveItServer(Node):
             < self.orientation_deadband_rad
         )
 
-    def _inside_hand_workspace(self, target: PoseStamped) -> bool:
+    def _constrain_hand_target_to_workspace(
+        self,
+        target: PoseStamped,
+    ) -> bool:
         position = target.pose.position
+        if not all(
+            math.isfinite(value)
+            for value in (position.x, position.y, position.z)
+        ):
+            self._warn_throttled(
+                "target_non_finite",
+                "Ignoring hand target with non-finite position",
+                2.0,
+            )
+            return False
+
+        if self.min_hand_target_z_m < self.max_hand_target_z_m:
+            constrained_z = _clamp(
+                position.z,
+                self.min_hand_target_z_m,
+                self.max_hand_target_z_m,
+            )
+            if constrained_z != position.z:
+                self._warn_throttled(
+                    "target_z_limit",
+                    f"Clamping hand target z={position.z:.3f} to "
+                    f"{constrained_z:.3f}m",
+                    2.0,
+                )
+                position.z = constrained_z
+
         distance_m = _position_norm(target)
         if (
             self.max_hand_target_distance_m > 0.0
             and distance_m > self.max_hand_target_distance_m
         ):
+            max_distance = self.max_hand_target_distance_m
+            position.z = _clamp(position.z, -max_distance, max_distance)
+            horizontal_distance = math.hypot(position.x, position.y)
+            max_horizontal_distance = math.sqrt(
+                max(
+                    0.0,
+                    (max_distance * max_distance)
+                    - (position.z * position.z),
+                )
+            )
+            if horizontal_distance > 1e-9:
+                horizontal_scale = (
+                    max_horizontal_distance / horizontal_distance
+                )
+                position.x *= horizontal_scale
+                position.y *= horizontal_scale
             self._warn_throttled(
                 "target_distance_limit",
-                f"Ignoring hand target {distance_m:.3f}m from base; "
-                f"max_hand_target_distance_m={self.max_hand_target_distance_m:.3f}. "
-                "Check wrist units/calibration.",
+                f"Clamping hand target {distance_m:.3f}m from base to "
+                f"{self.max_hand_target_distance_m:.3f}m",
                 2.0,
             )
-            return False
-
-        if (
-            self.min_hand_target_z_m < self.max_hand_target_z_m
-            and (
-                position.z < self.min_hand_target_z_m
-                or position.z > self.max_hand_target_z_m
-            )
-        ):
-            self._warn_throttled(
-                "target_z_limit",
-                f"Ignoring hand target z={position.z:.3f}; expected "
-                f"{self.min_hand_target_z_m:.3f} <= z <= "
-                f"{self.max_hand_target_z_m:.3f}. Check wrist calibration.",
-                2.0,
-            )
-            return False
 
         return True
 
@@ -945,7 +1265,14 @@ class ViveMoveItServer(Node):
         future: Future,
         target: PoseStamped,
         retry_count: int,
+        generation: int,
     ) -> None:
+        if (
+            generation != self.hand_target_generation
+            or not self.hand_target_active
+        ):
+            return
+
         try:
             response = future.result()
         except Exception as error:
@@ -955,7 +1282,12 @@ class ViveMoveItServer(Node):
 
         error_code = response.error_code.val
         if error_code != MoveItErrorCodes.SUCCESS:
-            if self._retry_ik_with_last_orientation(error_code, target, retry_count):
+            if self._retry_ik_with_last_orientation(
+                error_code,
+                target,
+                retry_count,
+                generation,
+            ):
                 return
 
             self._warn_throttled(
@@ -1019,6 +1351,7 @@ class ViveMoveItServer(Node):
         error_code: int,
         target: PoseStamped,
         retry_count: int,
+        generation: int,
     ) -> bool:
         if error_code != MoveItErrorCodes.NO_IK_SOLUTION:
             return False
@@ -1038,6 +1371,7 @@ class ViveMoveItServer(Node):
                 result,
                 retry_target,
                 retry_count=retry_count + 1,
+                generation=generation,
             )
         )
         self._info_throttled(
