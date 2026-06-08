@@ -69,10 +69,19 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     bool recenterHeadsetPoseOnNextSample;
     bool previousRecordingMenuButton;
     bool recordingActive;
+    bool openVrActionsInitialized;
+    bool openVrActionErrorLogged;
     uint lastOpenVrControllerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
     int recordingSamplesSinceFlush;
     string recordingPath;
     StreamWriter recordingWriter;
+    ulong openVrDefaultActionSetHandle = OpenVR.k_ulInvalidActionSetHandle;
+    ulong openVrInputSourceHandle = OpenVR.k_ulInvalidInputValueHandle;
+    ulong openVrTriggerActionHandle = OpenVR.k_ulInvalidActionHandle;
+    ulong openVrTriggerClickActionHandle = OpenVR.k_ulInvalidActionHandle;
+    ulong openVrGripActionHandle = OpenVR.k_ulInvalidActionHandle;
+    readonly VRActiveActionSet_t[] openVrActiveActionSets =
+        new VRActiveActionSet_t[1];
     readonly Dictionary<uint, string> openVrDeviceNames =
         new Dictionary<uint, string>();
     readonly List<InputDevice> xrWristDevices = new List<InputDevice>();
@@ -836,6 +845,17 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         var gripButton = IsOpenVrButtonPressed(
             pressed,
             EVRButtonId.k_EButton_Grip);
+        var triggerButton = IsOpenVrButtonPressed(
+            pressed,
+            EVRButtonId.k_EButton_SteamVR_Trigger);
+
+        var trigger = Mathf.Clamp01(controllerState.rAxis1.x);
+        var grip = gripButton ? 1f : 0f;
+        TryGetOpenVrActionState(ref trigger, ref grip);
+        if (triggerButton)
+        {
+            trigger = 1f;
+        }
 
         lastOpenVrControllerIndex = deviceIndex;
         wristPose = new WristPose
@@ -849,12 +869,146 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             primary2DAxis = new Vector2(
                 controllerState.rAxis0.x,
                 controllerState.rAxis0.y),
-            trigger = Mathf.Clamp01(controllerState.rAxis1.x),
-            grip = gripButton ? 1f : 0f,
+            trigger = trigger,
+            grip = grip,
             primaryButton = menuButton,
             menuButton = menuButton,
         };
         return true;
+    }
+
+    bool TryGetOpenVrActionState(ref float trigger, ref float grip)
+    {
+        var input = OpenVR.Input;
+        if (input == null || !EnsureOpenVrActionHandles(input))
+        {
+            return false;
+        }
+
+        openVrActiveActionSets[0] = new VRActiveActionSet_t
+        {
+            ulActionSet = openVrDefaultActionSetHandle,
+            ulRestrictedToDevice = OpenVR.k_ulInvalidInputValueHandle,
+            ulSecondaryActionSet = OpenVR.k_ulInvalidActionSetHandle,
+            nPriority = 0,
+        };
+        var actionSetSize =
+            (uint)Marshal.SizeOf(typeof(VRActiveActionSet_t));
+        var updateError =
+            input.UpdateActionState(openVrActiveActionSets, actionSetSize);
+        if (updateError != EVRInputError.None)
+        {
+            LogOpenVrActionError($"UpdateActionState failed: {updateError}");
+            return false;
+        }
+
+        var analogData = new InputAnalogActionData_t();
+        var analogError = input.GetAnalogActionData(
+            openVrTriggerActionHandle,
+            ref analogData,
+            (uint)Marshal.SizeOf(typeof(InputAnalogActionData_t)),
+            openVrInputSourceHandle);
+        if (analogError == EVRInputError.None && analogData.bActive)
+        {
+            trigger = Mathf.Max(trigger, Mathf.Clamp01(analogData.x));
+        }
+
+        var triggerClick = ReadOpenVrDigitalAction(
+            input,
+            openVrTriggerClickActionHandle,
+            out var triggerClickActive);
+        if (triggerClickActive && triggerClick)
+        {
+            trigger = 1f;
+        }
+
+        var gripClick = ReadOpenVrDigitalAction(
+            input,
+            openVrGripActionHandle,
+            out var gripClickActive);
+        if (gripClickActive && gripClick)
+        {
+            grip = 1f;
+        }
+
+        return
+            analogError == EVRInputError.None ||
+            triggerClickActive ||
+            gripClickActive;
+    }
+
+    bool EnsureOpenVrActionHandles(CVRInput input)
+    {
+        if (openVrActionsInitialized)
+        {
+            return true;
+        }
+
+        var inputSourcePath = wristXrNode == XRNode.LeftHand
+            ? "/user/hand/left"
+            : "/user/hand/right";
+        var errors = new[]
+        {
+            input.GetActionSetHandle(
+                "/actions/default",
+                ref openVrDefaultActionSetHandle),
+            input.GetInputSourceHandle(
+                inputSourcePath,
+                ref openVrInputSourceHandle),
+            input.GetActionHandle(
+                "/actions/default/in/Squeeze",
+                ref openVrTriggerActionHandle),
+            input.GetActionHandle(
+                "/actions/default/in/GrabPinch",
+                ref openVrTriggerClickActionHandle),
+            input.GetActionHandle(
+                "/actions/default/in/GrabGrip",
+                ref openVrGripActionHandle),
+        };
+        foreach (var error in errors)
+        {
+            if (error != EVRInputError.None)
+            {
+                LogOpenVrActionError(
+                    $"could not initialize action handles: {error}");
+                return false;
+            }
+        }
+
+        openVrActionsInitialized = true;
+        Debug.Log(
+            $"ViveTeleop OpenVR actions initialized for {inputSourcePath}.");
+        return true;
+    }
+
+    bool ReadOpenVrDigitalAction(
+        CVRInput input,
+        ulong actionHandle,
+        out bool active)
+    {
+        var actionData = new InputDigitalActionData_t();
+        var error = input.GetDigitalActionData(
+            actionHandle,
+            ref actionData,
+            (uint)Marshal.SizeOf(typeof(InputDigitalActionData_t)),
+            openVrInputSourceHandle);
+        active = error == EVRInputError.None && actionData.bActive;
+        if (error != EVRInputError.None)
+        {
+            LogOpenVrActionError($"GetDigitalActionData failed: {error}");
+        }
+        return active && actionData.bState;
+    }
+
+    void LogOpenVrActionError(string message)
+    {
+        if (openVrActionErrorLogged)
+        {
+            return;
+        }
+
+        openVrActionErrorLogged = true;
+        Debug.LogError($"ViveTeleop OpenVR input: {message}");
     }
 
     public void ToggleRecording()

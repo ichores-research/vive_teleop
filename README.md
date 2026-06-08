@@ -4,6 +4,84 @@
 
 The Unity VR client is still the intended headset frontend, but `index.html` can be used as a lightweight browser debug client without launching Unity or SteamVR.
 
+## Quick start on Linux
+
+From the repository root, start Docker, SteamVR, and the built Unity VR client:
+
+```bash
+cd /home/mateusz/vive_teleop
+./scripts/start-vive-teleop.sh
+```
+
+The script:
+
+1. Detects the Wi-Fi and robot-facing Ethernet addresses.
+2. Builds and starts `ros2_app_wifi`, `moveit_server_wifi`, and `coturn_wifi`.
+3. Waits for `http://<wifi-ip>:8088/config`.
+4. Starts SteamVR through Steam if it is not already running.
+5. Warns if the robot at `10.68.0.1` is unreachable.
+6. Runs the Unity player in the foreground with controller recording enabled.
+
+Use `Ctrl+C` in that terminal to stop the Unity player. Stop the containers with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
+  ros2_app_wifi moveit_server_wifi coturn_wifi
+```
+
+SteamVR is managed separately by Steam and can be closed from the SteamVR window.
+
+If the Unity player has not been built yet:
+
+```bash
+./scripts/check-unity-vr-linux.sh
+./scripts/build-unity-vr-linux.sh
+./scripts/start-vive-teleop.sh
+```
+
+The Unity build is expected at:
+
+```text
+unity-vr-headset/Builds/Linux/vive-teleop.x86_64
+```
+
+### Start each part manually
+
+Terminal 1, start the services in detached mode:
+
+```bash
+cd /home/mateusz/vive_teleop
+./scripts/up-wifi-webrtc.sh -d
+```
+
+Terminal 2, start SteamVR:
+
+```bash
+steam -applaunch 250820
+```
+
+Terminal 3, start the built Unity client:
+
+```bash
+cd /home/mateusz/vive_teleop
+./scripts/run-unity-vr-linux.sh
+```
+
+Useful health checks:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Status}}' |
+  grep -E 'ros2_app_wifi|moveit_server_wifi|coturn_wifi'
+
+WEBRTC_HOST_IP="$(./scripts/detect-webrtc-host-ip.sh)"
+curl -s "http://${WEBRTC_HOST_IP}:8088/config" | python3 -m json.tool
+
+docker exec moveit_server_wifi bash -lc \
+  'source /opt/ros/humble/setup.bash && ros2 topic info /joint_states -v'
+```
+
+Arm control remains disabled until `/joint_states` has a robot publisher.
+
 ## Architecture
 
 The current system has four main pieces:
@@ -113,6 +191,10 @@ Default behavior:
 - Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
 - Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
 - Publishes short `trajectory_msgs/JointTrajectory` commands directly to the robot's `/arm_controller/joint_trajectory` topic.
+- Treats the trigger/side-grip input as a deadman clutch. Each press anchors the current controller pose to the current robot wrist pose from MoveIt FK, so pressing the button while the controller is elsewhere does not move the arm.
+- Applies only controller translation and rotation accumulated after the current deadman press. Releasing the button clears the target, clutch anchors, IK pursuit state, and queued messages.
+- Keeps only the newest hand target. New samples replace the previous target instead of being replayed as a movement queue.
+- Uses one `0.04` second trajectory period per command and pursues the newest target through bounded Cartesian IK increments.
 - Subscribes to normalized commands on `/vive/gripper_opening` and publishes synchronized, velocity-aware finger trajectories to `/gripper_controller/joint_trajectory`.
 - Suppresses the initial gripper command when the requested opening matches the measured robot state, then suppresses duplicate targets within the configured deadband.
 - Overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik` in local, one-attempt mode for small repeated joystick moves.
@@ -131,6 +213,7 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `head_pan_sign` and `head_tilt_sign`: sign calibration knobs if runtime testing shows Unity yaw or pitch inverted.
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
 - `ik_service_name`: defaults to `/compute_ik`.
+- `fk_service_name`: defaults to `/compute_fk` and is used to capture the current robot wrist pose when the deadman is pressed.
 - `joint_state_topic`: defaults to `/joint_states`.
 - `arm_command_topic`: direct ROS2 trajectory topic for the arm controller, default `/arm_controller/joint_trajectory`.
 - `gripper_input_topic`: normalized `std_msgs/Float64` command topic, configured as `/vive/gripper_opening`.
@@ -140,7 +223,9 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `gripper_deadband_m`: suppresses repeated targets within `0.0005` m.
 - `gripper_command_duration_sec`: minimum trajectory duration, configured as `0.15` seconds.
 - `gripper_max_velocity_mps`: extends the trajectory duration when required to keep finger motion at or below `0.04` m/s.
-- `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: safety bounds for rejecting obviously uncalibrated wrist targets before IK.
+- `hand_target_timeout_sec`: time without a gated hand target before the deadman is considered released. It is configured as `0.12` seconds.
+- `cartesian_position_step_m` and `cartesian_orientation_step_rad`: maximum Cartesian increments used while pursuing the newest relative target.
+- `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: workspace limits applied before IK.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
 - `max_joint_delta_rad`, `joint_smoothing_alpha`, `joint_command_deadband_rad`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output. The joint deadband stops repeated trajectory refreshes after the arm reaches its requested pose.
 - `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec`: startup/resume ramp tuning.
@@ -171,13 +256,21 @@ To pass robot variant arguments through to TIAGo MoveIt, set `moveit_arm`, `move
 
 ## Running
 
-Start the containers:
+For the complete VR application, use the Linux quick-start command:
 
 ```bash
-sudo docker compose up --build
+./scripts/start-vive-teleop.sh
 ```
 
-This starts `ros2_app`, `moveit_server`, and `coturn`. The MoveIt container needs a TIAGo MoveIt/robot description configuration available on the ROS2 graph before arm planning can succeed.
+For Docker services only:
+
+```bash
+./scripts/up-wifi-webrtc.sh -d
+```
+
+This starts the host-network `ros2_app_wifi`, `moveit_server_wifi`, and
+`coturn_wifi` services. The MoveIt container needs live robot `/joint_states`
+and the TIAGo robot description before arm IK can command the physical arm.
 
 In another terminal, serve the debug client:
 
@@ -273,7 +366,12 @@ By default the input payload includes:
 
 `joystickGrip` is telemetry only. The current Unity client does not populate `gripperAvailable` or `gripperOpening`, so it does not actuate the robot gripper.
 
-Hold the Vive trigger or side-grip button to command the robot wrist. The controller pose is anchored to the robot's current target when the button is pressed, so engaging control does not jump the arm. Controller forward/right/up motion maps to robot forward/right/up motion. Release the button to freeze the robot target.
+Hold the Vive trigger or side-grip button to command the robot wrist. On every
+press, the MoveIt server anchors that controller pose to the robot's current
+wrist pose. Holding the controller still causes no movement; only translation
+and rotation after the press are applied. Release the button to clear the
+target and clutch state. The next press creates new anchors from the robot's
+then-current wrist pose.
 
 Press `R` in the Unity player to re-anchor the current controller pose to the current robot wrist target. If the joystick is represented by a custom tracked GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`; otherwise the right-hand XR node is used.
 
@@ -291,6 +389,13 @@ VIVE_TELEOP_RECORDING_DIR="$PWD/recordings" \
 ./unity-vr-headset/Builds/Linux/vive-teleop.x86_64
 ```
 
+The recommended terminal launcher sets these variables and writes a timestamped
+player log automatically:
+
+```bash
+./scripts/run-unity-vr-linux.sh
+```
+
 Builds can override the scene URL with either `VIVE_TELEOP_WEBRTC_CONFIG_URL` or a command-line argument:
 
 ```bash
@@ -304,6 +409,28 @@ Build a Linux player after closing the project in the Unity editor:
 ```
 
 ## Troubleshooting
+
+If the robot image is visible but the arm cannot move, first verify that the
+robot is online and publishing joint state:
+
+```bash
+ping -c 3 10.68.0.1
+
+docker exec moveit_server_wifi bash -lc \
+  'source /opt/ros/humble/setup.bash && \
+   ros2 topic info /joint_states -v'
+```
+
+`Publisher count: 0` means the robot is not currently discoverable. The
+deadman clutch intentionally waits instead of commanding the arm without a
+current robot pose.
+
+Inspect the current service logs:
+
+```bash
+docker logs --tail 100 ros2_app_wifi
+docker logs --tail 150 moveit_server_wifi
+```
 
 If the browser shows a fetch/network error for `/offer` or `/input_offer`, WebRTC negotiation has not started yet. The HTTP signaling endpoint is unreachable from the browser.
 
