@@ -194,7 +194,11 @@ Default behavior:
 - Treats the trigger/side-grip input as a deadman clutch. Each press anchors the current controller pose to the current robot wrist pose from MoveIt FK, so pressing the button while the controller is elsewhere does not move the arm.
 - Applies only controller translation and rotation accumulated after the current deadman press. Releasing the button clears the target, clutch anchors, IK pursuit state, and queued messages.
 - Keeps only the newest hand target. New samples replace the previous target instead of being replayed as a movement queue.
-- Uses one `0.04` second trajectory period per command and pursues the newest target through bounded Cartesian IK increments.
+- Evaluates the newest target at a nominal `0.04` second cadence and pursues it through bounded Cartesian IK increments.
+- Seeds repeated IK from the previous command endpoint rather than delayed measured joints, with a measured-state resynchronization guard if the physical arm falls too far behind.
+- Rejects IK solutions that jump to a distant joint-space branch instead of slowly chasing the discontinuity through the joint-delta limiter.
+- Publishes overlapping `0.08` second arm trajectory points at the nominal 25 Hz update rate so timing jitter does not leave command gaps.
+- Starts direct arm trajectories immediately on receipt instead of timestamping them on the host, avoiding clock-skew and transport-delay loss on the robot controller.
 - Subscribes to normalized commands on `/vive/gripper_opening` and publishes synchronized, velocity-aware finger trajectories to `/gripper_controller/joint_trajectory`.
 - Suppresses the initial gripper command when the requested opening matches the measured robot state, then suppresses duplicate targets within the configured deadband.
 - Overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik` in local, one-attempt mode for small repeated joystick moves.
@@ -228,6 +232,8 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: workspace limits applied before IK.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
 - `max_joint_delta_rad`, `joint_smoothing_alpha`, `joint_command_deadband_rad`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output. The joint deadband stops repeated trajectory refreshes after the arm reaches its requested pose.
+- `ik_seed_from_commanded_state`, `ik_command_resync_threshold_rad`, and `ik_solution_jump_threshold_rad`: keep repeated IK on the current joint-space branch while falling back to measured state if command tracking diverges.
+- `ik_slow_request_warn_sec`: reports IK service round trips that consume too much of the control period.
 - `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec`: startup/resume ramp tuning.
 
 `NO_IK_SOLUTION` (`-31`) does not necessarily mean the `xyz` point is visually impossible. In `ik_topic` mode MoveIt is solving the full `end_effector_link` pose for the arm-only group, including orientation, joint limits, current seed state, and the fact that torso is intentionally locked out.

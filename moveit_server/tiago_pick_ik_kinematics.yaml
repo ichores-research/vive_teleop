@@ -9,7 +9,9 @@ arm_torso:
   position_threshold: 0.005
   orientation_threshold: 0.02
   cost_threshold: 0.01
-  minimal_displacement_weight: 0.8
+  # pick_ik recommends a small non-zero displacement weight for endpoint
+  # jogging. The old 0.8 value dominated the pose cost and resisted motion.
+  minimal_displacement_weight: 0.001
   avoid_joint_limits_weight: 0.05
   gd_step_size: 0.0001
 
@@ -24,6 +26,8 @@ arm:
   position_threshold: 0.005
   orientation_threshold: 0.02
   cost_threshold: 0.01
-  minimal_displacement_weight: 0.8
+  # Keep the local solution near the command-state seed without overwhelming
+  # the Cartesian pose objective.
+  minimal_displacement_weight: 0.001
   avoid_joint_limits_weight: 0.05
   gd_step_size: 0.0001

@@ -335,6 +335,24 @@ class ViveMoveItServer(Node):
         self.joint_command_deadband_rad = float(
             self.declare_parameter("joint_command_deadband_rad", 0.003).value
         )
+        self.ik_seed_from_commanded_state = bool(
+            self.declare_parameter("ik_seed_from_commanded_state", True).value
+        )
+        self.ik_command_resync_threshold_rad = float(
+            self.declare_parameter(
+                "ik_command_resync_threshold_rad",
+                0.25,
+            ).value
+        )
+        self.ik_solution_jump_threshold_rad = float(
+            self.declare_parameter(
+                "ik_solution_jump_threshold_rad",
+                0.35,
+            ).value
+        )
+        self.ik_slow_request_warn_sec = float(
+            self.declare_parameter("ik_slow_request_warn_sec", 0.025).value
+        )
         self.ik_warmup_sec = float(
             self.declare_parameter("ik_warmup_sec", 1.5).value
         )
@@ -911,6 +929,7 @@ class ViveMoveItServer(Node):
                 stepped_target,
                 retry_count=0,
                 generation=generation,
+                request_started_sec=now_sec,
             )
         )
 
@@ -1059,7 +1078,9 @@ class ViveMoveItServer(Node):
     def _build_ik_request(self, target: PoseStamped) -> GetPositionIK.Request:
         request = GetPositionIK.Request()
         request.ik_request.group_name = self.arm_group
-        request.ik_request.robot_state = self._build_current_robot_state()
+        request.ik_request.robot_state = self._build_current_robot_state(
+            prefer_commanded=True
+        )
         request.ik_request.avoid_collisions = self.ik_avoid_collisions
         request.ik_request.ik_link_name = self.end_effector_link
         request.ik_request.pose_stamped = target
@@ -1092,19 +1113,64 @@ class ViveMoveItServer(Node):
 
         return scale
 
-    def _build_current_robot_state(self) -> RobotState:
+    def _build_current_robot_state(
+        self,
+        prefer_commanded: bool = False,
+    ) -> RobotState:
+        joint_positions = self._joint_reference_positions(prefer_commanded)
         robot_state = RobotState()
         robot_state.joint_state.name = [
             name
             for name in self._active_output_joint_names()
-            if name in self.current_joint_positions
+            if name in joint_positions
         ]
         robot_state.joint_state.position = [
-            self.current_joint_positions[name]
+            joint_positions[name]
             for name in robot_state.joint_state.name
         ]
         robot_state.is_diff = True
         return robot_state
+
+    def _joint_reference_positions(
+        self,
+        prefer_commanded: bool,
+    ) -> Dict[str, float]:
+        positions = dict(self.current_joint_positions)
+        if (
+            not prefer_commanded
+            or not self.ik_seed_from_commanded_state
+            or not self.last_commanded_joint_positions
+        ):
+            return positions
+
+        resync_threshold = max(0.0, self.ik_command_resync_threshold_rad)
+        if resync_threshold > 0.0:
+            for joint_name in self.arm_joint_names:
+                if (
+                    joint_name not in self.current_joint_positions
+                    or joint_name not in self.last_commanded_joint_positions
+                ):
+                    continue
+                tracking_error = abs(
+                    self.last_commanded_joint_positions[joint_name]
+                    - self.current_joint_positions[joint_name]
+                )
+                if tracking_error > resync_threshold:
+                    self._warn_throttled(
+                        "ik_command_resync",
+                        "IK command state is ahead of measured joints by "
+                        f"{tracking_error:.3f} rad on '{joint_name}'; "
+                        "temporarily seeding from measured state",
+                        1.0,
+                    )
+                    return positions
+
+        for joint_name in self._active_output_joint_names():
+            if joint_name in self.last_commanded_joint_positions:
+                positions[joint_name] = self.last_commanded_joint_positions[
+                    joint_name
+                ]
+        return positions
 
     def _active_output_joint_names(self) -> list[str]:
         if "torso" in str(self.arm_group):
@@ -1266,12 +1332,25 @@ class ViveMoveItServer(Node):
         target: PoseStamped,
         retry_count: int,
         generation: int,
+        request_started_sec: float,
     ) -> None:
         if (
             generation != self.hand_target_generation
             or not self.hand_target_active
         ):
             return
+
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        request_duration_sec = max(0.0, now_sec - request_started_sec)
+        if (
+            self.ik_slow_request_warn_sec > 0.0
+            and request_duration_sec > self.ik_slow_request_warn_sec
+        ):
+            self._warn_throttled(
+                "slow_ik_request",
+                f"MoveIt IK round trip took {request_duration_sec * 1000.0:.1f} ms",
+                1.0,
+            )
 
         try:
             response = future.result()
@@ -1310,6 +1389,10 @@ class ViveMoveItServer(Node):
                 response.solution.joint_state.position,
             )
         }
+        if not self._ik_solution_is_continuous(solution_positions):
+            self.goal_in_flight = False
+            return
+
         self.last_successful_ik_target = _copy_pose_stamped(target)
         if self._ik_solution_reached(solution_positions):
             self.last_commanded_target = _copy_pose_stamped(target)
@@ -1327,24 +1410,66 @@ class ViveMoveItServer(Node):
 
     def _ik_solution_reached(self, solution_positions: Dict[str, float]) -> bool:
         deadband = max(0.0, self.joint_command_deadband_rad)
+        reference_positions = self._joint_reference_positions(
+            prefer_commanded=True
+        )
         compared_joint_count = 0
         for joint_name in self._active_output_joint_names():
             if (
                 joint_name not in solution_positions
-                or joint_name not in self.current_joint_positions
+                or joint_name not in reference_positions
             ):
                 continue
             compared_joint_count += 1
             if (
                 abs(
                     solution_positions[joint_name]
-                    - self.current_joint_positions[joint_name]
+                    - reference_positions[joint_name]
                 )
                 > deadband
             ):
                 return False
 
         return compared_joint_count > 0
+
+    def _ik_solution_is_continuous(
+        self,
+        solution_positions: Dict[str, float],
+    ) -> bool:
+        jump_threshold = max(0.0, self.ik_solution_jump_threshold_rad)
+        if jump_threshold <= 0.0:
+            return True
+
+        reference_positions = self._joint_reference_positions(
+            prefer_commanded=True
+        )
+        largest_jump = 0.0
+        largest_jump_joint = ""
+        for joint_name in self.arm_joint_names:
+            if (
+                joint_name not in solution_positions
+                or joint_name not in reference_positions
+            ):
+                continue
+            jump = abs(
+                solution_positions[joint_name]
+                - reference_positions[joint_name]
+            )
+            if jump > largest_jump:
+                largest_jump = jump
+                largest_jump_joint = joint_name
+
+        if largest_jump <= jump_threshold:
+            return True
+
+        self._warn_throttled(
+            "ik_solution_jump",
+            "Rejected discontinuous IK solution: "
+            f"'{largest_jump_joint}' changed by {largest_jump:.3f} rad "
+            f"(limit {jump_threshold:.3f} rad)",
+            0.5,
+        )
+        return False
 
     def _retry_ik_with_last_orientation(
         self,
@@ -1365,6 +1490,7 @@ class ViveMoveItServer(Node):
         retry_target = _copy_pose_stamped(target)
         retry_target.pose.orientation = self.last_successful_ik_target.pose.orientation
         request = self._build_ik_request(retry_target)
+        request_started_sec = self.get_clock().now().nanoseconds / 1e9
         future = self.ik_client.call_async(request)
         future.add_done_callback(
             lambda result: self._on_ik_result(
@@ -1372,6 +1498,7 @@ class ViveMoveItServer(Node):
                 retry_target,
                 retry_count=retry_count + 1,
                 generation=generation,
+                request_started_sec=request_started_sec,
             )
         )
         self._info_throttled(
@@ -1397,7 +1524,10 @@ class ViveMoveItServer(Node):
             return "PLANNING_FAILED"
         return "UNKNOWN"
 
-    def _publish_ik_joint_command(self, solution_positions: Dict[str, float]) -> bool:
+    def _publish_ik_joint_command(
+        self,
+        solution_positions: Dict[str, float],
+    ) -> bool:
         published = False
         if self._publish_joint_position_command(
             solution_positions,
@@ -1428,15 +1558,14 @@ class ViveMoveItServer(Node):
         if not selected_joint_names:
             return False
 
+        reference_positions = self._joint_reference_positions(
+            prefer_commanded=True
+        )
         start_positions: Dict[str, float] = {}
         missing_start_positions = []
         for joint_name in selected_joint_names:
-            if joint_name in self.current_joint_positions:
-                start_positions[joint_name] = self.current_joint_positions[joint_name]
-            elif joint_name in self.last_commanded_joint_positions:
-                start_positions[joint_name] = self.last_commanded_joint_positions[
-                    joint_name
-                ]
+            if joint_name in reference_positions:
+                start_positions[joint_name] = reference_positions[joint_name]
             else:
                 missing_start_positions.append(joint_name)
 
@@ -1471,7 +1600,8 @@ class ViveMoveItServer(Node):
         ).to_msg()
 
         trajectory = JointTrajectory()
-        trajectory.header.stamp = self.get_clock().now().to_msg()
+        # A zero start stamp tells joint_trajectory_controller to start on
+        # receipt. Host/robot clock skew must not consume a short teleop command.
         trajectory.joint_names = selected_joint_names
         trajectory.points = [point]
         publisher.publish(trajectory)
