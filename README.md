@@ -181,6 +181,12 @@ When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages
 
 The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app` and the robot. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, starts `robot_state_publisher`, and then starts the teleop node.
 
+The teleop node is split by responsibility:
+
+- `vive_moveit_server/vive_moveit_server.py`: node initialization, parameters, ROS clients/publishers, timers, and head/gripper control.
+- `vive_moveit_server/teleop_data.py`: ROS subscriptions for head, hand, gripper, and joint-state input.
+- `vive_moveit_server/arm_movement.py`: deadman clutching, FK/IK and MoveGroup requests, workspace limits, smoothing, and arm/torso trajectory publication.
+
 Default behavior:
 
 - Subscribes to `/vive/head_pose`, converts raw Unity HMD orientation into TIAGo head pan/tilt joints, and publishes `trajectory_msgs/JointTrajectory` commands to `/head_controller/joint_trajectory`.
