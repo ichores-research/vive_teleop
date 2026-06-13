@@ -1,0 +1,15 @@
+servo_pose_bridge:
+  ros__parameters:
+    pose_command_topic: /servo_node/pose_target_cmds
+    twist_command_topic: /servo_node/delta_twist_cmds
+    start_servo_service: /servo_node/start_servo
+    planning_frame: base_footprint
+    end_effector_frame: arm_tool_link
+    publish_rate_hz: 100.0
+    target_timeout_sec: 0.12
+    linear_gain: 5.0
+    angular_gain: 2.5
+    max_linear_velocity_mps: 0.50
+    max_angular_velocity_radps: 1.50
+    position_deadband_m: 0.001
+    orientation_deadband_rad: 0.005

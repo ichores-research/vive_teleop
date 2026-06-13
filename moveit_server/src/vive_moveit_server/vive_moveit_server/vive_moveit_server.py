@@ -3,9 +3,6 @@ from typing import Dict, List, Optional
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Quaternion
-from moveit_msgs.action import MoveGroup
-from moveit_msgs.srv import GetPositionFK, GetPositionIK
-from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -94,14 +91,6 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             "hand_target_topic",
             "/vive/hand_target_pose",
         ).value
-        arm_command_topic = self.declare_parameter(
-            "arm_command_topic",
-            "/arm_controller/joint_trajectory",
-        ).value
-        torso_command_topic = self.declare_parameter(
-            "torso_command_topic",
-            "/torso_controller/joint_trajectory",
-        ).value
         gripper_input_topic = self.declare_parameter(
             "gripper_input_topic",
             "/vive/gripper_opening",
@@ -115,54 +104,17 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             "/joint_states",
         ).value
 
-        self.move_group_action_name = self.declare_parameter(
-            "move_group_action_name",
-            "/move_action",
-        ).value
-        self.ik_service_name = self.declare_parameter(
-            "ik_service_name",
-            "/compute_ik",
-        ).value
-        self.fk_service_name = self.declare_parameter(
-            "fk_service_name",
-            "/compute_fk",
-        ).value
-        self.execution_mode = self.declare_parameter(
-            "execution_mode",
-            "moveit",
-        ).value
-        self.async_execution = bool(
-            self.declare_parameter("async_execution", True).value
-        )
         self.pose_reference_frame = self.declare_parameter(
             "pose_reference_frame",
             "base_footprint",
         ).value
 
         float_parameters = {
-            "planning_time_sec": 0.35,
-            "max_velocity_scaling_factor": 0.25,
-            "max_acceleration_scaling_factor": 0.25,
-            "min_plan_interval_sec": 0.25,
             "hand_target_timeout_sec": 0.12,
-            "cartesian_position_step_m": 0.02,
-            "cartesian_orientation_step_rad": 0.12,
-            "position_deadband_m": 0.01,
-            "orientation_deadband_rad": 0.035,
-            "goal_position_tolerance_m": 0.01,
-            "goal_orientation_tolerance_rad": 0.035,
-            "wait_for_move_group_timeout_sec": 0.0,
+            "servo_service_wait_timeout_sec": 0.0,
             "max_hand_target_distance_m": 1.5,
             "min_hand_target_z_m": 0.2,
             "max_hand_target_z_m": 1.6,
-            "ik_timeout_sec": 0.03,
-            "command_duration_sec": 0.12,
-            "max_joint_delta_rad": 0.08,
-            "joint_smoothing_alpha": 0.6,
-            "joint_command_deadband_rad": 0.003,
-            "ik_warmup_sec": 1.5,
-            "ik_warmup_min_scale": 0.15,
-            "ik_warmup_reset_after_sec": 0.5,
             "head_publish_rate_hz": 20.0,
             "head_command_duration_sec": 0.06,
             "head_deadband_rad": 0.01,
@@ -181,19 +133,6 @@ class ViveMoveItServer(ArmMovementMixin, Node):
                 name,
                 float(self.declare_parameter(name, default).value),
             )
-
-        self.num_planning_attempts = int(
-            self.declare_parameter("num_planning_attempts", 1).value
-        )
-        self.ik_avoid_collisions = bool(
-            self.declare_parameter("ik_avoid_collisions", False).value
-        )
-        self.ik_retry_last_orientation_on_no_solution = bool(
-            self.declare_parameter(
-                "ik_retry_last_orientation_on_no_solution",
-                True,
-            ).value
-        )
 
         self.head_joint_names = _declare_string_list_parameter(
             self,
@@ -243,46 +182,18 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             ).value,
             [0.0, 0.0, 0.0],
         )
-        self.arm_joint_names = _declare_string_list_parameter(
-            self,
-            "arm_joint_names",
-            [
-                "arm_1_joint",
-                "arm_2_joint",
-                "arm_3_joint",
-                "arm_4_joint",
-                "arm_5_joint",
-                "arm_6_joint",
-                "arm_7_joint",
-            ],
-        )
-        self.torso_joint_names = _declare_string_list_parameter(
-            self,
-            "torso_joint_names",
-            ["torso_lift_joint"],
-        )
-
         self.pending_hand_target: Optional[PoseStamped] = None
         self.latest_head_pose: Optional[PoseStamped] = None
         self.last_head_pan: Optional[float] = None
         self.last_head_tilt: Optional[float] = None
         self.last_commanded_target: Optional[PoseStamped] = None
-        self.last_successful_ik_target: Optional[PoseStamped] = None
         self.deadman_controller_anchor: Optional[PoseStamped] = None
         self.deadman_robot_anchor: Optional[PoseStamped] = None
         self.current_joint_positions: Dict[str, float] = {}
-        self.last_commanded_joint_positions: Dict[str, float] = {}
         self.last_gripper_target_position: Optional[float] = None
-        self.last_plan_started_sec = 0.0
         self.last_hand_target_received_sec = 0.0
-        self.last_ik_request_sec = 0.0
-        self.ik_warmup_started_sec = 0.0
-        self.current_ik_motion_scale = 1.0
         self.last_log_times: Dict[str, float] = {}
-        self.goal_in_flight = False
-        self.fk_request_in_flight = False
         self.hand_target_active = False
-        self.hand_target_generation = 0
         self.received_head_pose = False
         self.received_hand_target = False
         self.received_joint_state = False
@@ -292,32 +203,11 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             head_command_topic,
             10,
         )
-        self.trajectory_publisher = self.create_publisher(
-            JointTrajectory,
-            arm_command_topic,
-            10,
-        )
         self.gripper_trajectory_publisher = self.create_publisher(
             JointTrajectory,
             gripper_command_topic,
             10,
         )
-        self.torso_trajectory_publisher = None
-        if torso_command_topic:
-            self.torso_trajectory_publisher = self.create_publisher(
-                JointTrajectory,
-                torso_command_topic,
-                10,
-            )
-
-        self.move_group_action = ActionClient(
-            self,
-            MoveGroup,
-            self.move_group_action_name,
-        )
-        self.ik_client = self.create_client(GetPositionIK, self.ik_service_name)
-        self.fk_client = self.create_client(GetPositionFK, self.fk_service_name)
-
         self.data_receiver = TeleopDataReceiver(
             self,
             head_input_topic=head_input_topic,
@@ -346,24 +236,9 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             f"'{gripper_command_topic}'"
         )
         self.get_logger().info(
-            f"MoveIt action '{self.move_group_action_name}', group "
-            f"'{self.arm_group}', end effector '{self.end_effector_link}', "
-            f"mode '{self.execution_mode}'"
+            f"Arm targets use MoveIt Servo group '{self.arm_group}' with "
+            f"end effector '{self.end_effector_link}'"
         )
-        if self.execution_mode == "trajectory_topic":
-            self.get_logger().info(
-                f"Planned arm trajectories publish to '{arm_command_topic}'"
-                + (
-                    f" and torso trajectories publish to '{torso_command_topic}'"
-                    if torso_command_topic
-                    else ""
-                )
-            )
-        elif self.execution_mode == "ik_topic":
-            self.get_logger().info(
-                f"IK service '{self.ik_service_name}' seeds from '{joint_state_topic}' "
-                f"and publishes short trajectories to '{arm_command_topic}'"
-            )
 
     def _on_head_pose(self, message: PoseStamped) -> None:
         if not self.received_head_pose:

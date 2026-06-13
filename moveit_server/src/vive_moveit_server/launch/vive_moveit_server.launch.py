@@ -133,7 +133,8 @@ def include_optional_moveit_launch(context, *args, **kwargs):
     if not is_truthy(enabled):
         return [
             LogInfo(
-                msg="MoveIt launch include disabled; vive_moveit_server will wait for an external MoveGroup action server."
+                msg="MoveGroup launch include disabled; Servo will use any "
+                "planning scene updates already available on the ROS graph."
             )
         ]
 
@@ -142,7 +143,8 @@ def include_optional_moveit_launch(context, *args, **kwargs):
     if not launch_file:
         return [
             LogInfo(
-                msg="No MoveIt launch file configured; vive_moveit_server will wait for an external MoveGroup action server."
+                msg="No MoveGroup launch file configured; Servo will use any "
+                "planning scene updates already available on the ROS graph."
             )
         ]
 
@@ -151,7 +153,8 @@ def include_optional_moveit_launch(context, *args, **kwargs):
         launch_file,
         lambda reason: (
             reason
-            + "; vive_moveit_server will wait for an external MoveGroup action server."
+            + "; Servo will use any planning scene updates already available "
+            "on the ROS graph."
         ),
     )
     if launch_path is None:
@@ -166,6 +169,45 @@ def include_optional_moveit_launch(context, *args, **kwargs):
         ("moveit_use_sensor_manager", "use_sensor_manager"),
     ):
         launch_argument = optional_launch_argument(context, local_name, included_name)
+        if launch_argument is not None:
+            included_arguments.append(launch_argument)
+
+    return [
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(launch_path),
+            launch_arguments=included_arguments,
+        )
+    ]
+
+
+def include_optional_servo_launch(context, *args, **kwargs):
+    enabled = LaunchConfiguration("servo_launch_enabled").perform(context)
+    if not is_truthy(enabled):
+        return [
+            LogInfo(
+                msg="MoveIt Servo runtime disabled; arm pose commands will "
+                "not be consumed."
+            )
+        ]
+
+    launch_path = os.path.join(
+        get_package_share_directory("vive_moveit_server"),
+        "launch",
+        "servo_runtime.launch.py",
+    )
+    included_arguments = []
+    for local_name, included_name in (
+        ("moveit_base_type", "base_type"),
+        ("moveit_arm_type", "arm_type"),
+        ("moveit_end_effector", "end_effector"),
+        ("moveit_ft_sensor", "ft_sensor"),
+        ("moveit_use_sim_time", "use_sim_time"),
+    ):
+        launch_argument = optional_launch_argument(
+            context,
+            local_name,
+            included_name,
+        )
         if launch_argument is not None:
             included_arguments.append(launch_argument)
 
@@ -226,7 +268,10 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "moveit_allow_trajectory_execution",
                 default_value="False",
-                description="Forwarded to MoveIt move_group; false keeps execution in vive_moveit_server controller-topic mode.",
+                description=(
+                    "Forwarded to MoveGroup; Servo publishes arm controller "
+                    "trajectories directly."
+                ),
             ),
             DeclareLaunchArgument(
                 "moveit_publish_monitored_planning_scene",
@@ -303,8 +348,14 @@ def generate_launch_description():
                 default_value="",
                 description="Optional use_sensor_manager forwarded to the included TIAGo MoveIt launch.",
             ),
+            DeclareLaunchArgument(
+                "servo_launch_enabled",
+                default_value="true",
+                description="Start MoveIt Servo and the Humble pose-command bridge.",
+            ),
             OpaqueFunction(function=include_optional_robot_description_launch),
             OpaqueFunction(function=include_optional_moveit_launch),
+            OpaqueFunction(function=include_optional_servo_launch),
             Node(
                 package="vive_moveit_server",
                 executable="vive_moveit_server",
