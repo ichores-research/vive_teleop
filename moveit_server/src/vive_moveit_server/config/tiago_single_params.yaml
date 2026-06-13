@@ -24,6 +24,7 @@ vive_moveit_server:
     head_pan_sign: -1.0
     head_tilt_sign: -1.0
     hand_target_topic: /vive/hand_target_pose
+    hand_target_active_topic: /vive/hand_target_active
     gripper_input_topic: /vive/gripper_opening
     gripper_command_topic: /gripper_controller/joint_trajectory
     gripper_joint_names:
@@ -54,4 +55,3 @@ vive_moveit_server:
     max_hand_target_z_m: 1.6
 
     hand_position_scale: [1.0, 1.0, 1.0]
-    hand_position_offset: [0.0, 0.0, 0.0]

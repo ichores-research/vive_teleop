@@ -91,6 +91,10 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             "hand_target_topic",
             "/vive/hand_target_pose",
         ).value
+        hand_target_active_topic = self.declare_parameter(
+            "hand_target_active_topic",
+            "/vive/hand_target_active",
+        ).value
         gripper_input_topic = self.declare_parameter(
             "gripper_input_topic",
             "/vive/gripper_opening",
@@ -175,13 +179,6 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             ).value,
             [1.0, 1.0, 1.0],
         )
-        self.hand_position_offset = _vector_parameter(
-            self.declare_parameter(
-                "hand_position_offset",
-                [0.0, 0.0, 0.0],
-            ).value,
-            [0.0, 0.0, 0.0],
-        )
         self.pending_hand_target: Optional[PoseStamped] = None
         self.latest_head_pose: Optional[PoseStamped] = None
         self.last_head_pan: Optional[float] = None
@@ -212,10 +209,12 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             self,
             head_input_topic=head_input_topic,
             hand_target_topic=hand_target_topic,
+            hand_target_active_topic=hand_target_active_topic,
             gripper_input_topic=gripper_input_topic,
             joint_state_topic=joint_state_topic,
             on_head_pose=self._on_head_pose,
             on_hand_target=self._on_hand_target,
+            on_hand_target_active=self._on_hand_target_active,
             on_gripper_opening=self._on_gripper_opening,
             on_joint_state=self._on_joint_state,
         )

@@ -4,11 +4,12 @@ from typing import Any
 
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
-from std_msgs.msg import Float64
+from std_msgs.msg import Bool, Float64
 
 
 DEFAULT_HEAD_POSE_TOPIC = "/vive/head_pose"
 DEFAULT_HAND_TARGET_TOPIC = "/vive/hand_target_pose"
+DEFAULT_HAND_TARGET_ACTIVE_TOPIC = "/vive/hand_target_active"
 DEFAULT_GRIPPER_TARGET_TOPIC = "/vive/gripper_opening"
 
 
@@ -29,6 +30,11 @@ class WebRtcInputPublisher(Node):
             hand_target_topic,
             10,
         )
+        self._hand_target_active_publisher = self.create_publisher(
+            Bool,
+            DEFAULT_HAND_TARGET_ACTIVE_TOPIC,
+            10,
+        )
         self._gripper_target_publisher = self.create_publisher(
             Float64,
             DEFAULT_GRIPPER_TARGET_TOPIC,
@@ -42,6 +48,7 @@ class WebRtcInputPublisher(Node):
         data = self._parse_json_object(payload_text)
         if data is not None:
             self._publish_head_pose(data)
+            self._publish_hand_target_active(data)
             self._publish_hand_target(data)
             self._publish_gripper_target(data)
         now_sec = self.get_clock().now().nanoseconds / 1e9
@@ -111,6 +118,17 @@ class WebRtcInputPublisher(Node):
             return
 
         self._hand_target_publisher.publish(message)
+
+    def _publish_hand_target_active(self, data: dict[str, Any]) -> None:
+        if not data.get("wristAvailable"):
+            return
+
+        message = Bool()
+        command_enabled = data.get("wristCommandEnabled")
+        message.data = (
+            True if command_enabled is None else bool(command_enabled)
+        )
+        self._hand_target_active_publisher.publish(message)
 
     def _publish_gripper_target(self, data: dict[str, Any]) -> None:
         if not data.get("gripperAvailable"):

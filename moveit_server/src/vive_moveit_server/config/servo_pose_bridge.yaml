@@ -13,3 +13,12 @@ servo_pose_bridge:
     max_angular_velocity_radps: 1.50
     position_deadband_m: 0.001
     orientation_deadband_rad: 0.005
+    # Track target motion directly, with proportional pose error correcting
+    # residual lag. Feed-forward expires before the deadman target timeout.
+    linear_feedforward_gain: 1.0
+    angular_feedforward_gain: 1.0
+    feedforward_filter_alpha: 0.35
+    feedforward_timeout_sec: 0.08
+    feedforward_reset_gap_sec: 0.12
+    linear_feedforward_stop_velocity_mps: 0.005
+    angular_feedforward_stop_velocity_radps: 0.02

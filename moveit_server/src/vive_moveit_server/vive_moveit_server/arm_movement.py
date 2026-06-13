@@ -4,6 +4,7 @@ from geometry_msgs.msg import PoseStamped, Quaternion
 from rclpy.qos import qos_profile_system_default
 from rclpy.task import Future
 from rclpy.time import Time
+from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformException, TransformListener
 
 try:
@@ -104,9 +105,20 @@ def _inverse_quaternion(quaternion: Quaternion) -> Quaternion:
 class ArmMovementMixin:
     """Arm clutching and MoveIt Servo pose-command publication."""
 
+    def _on_hand_target_active(self, message: Bool) -> None:
+        if message.data:
+            return
+        if (
+            self.hand_target_active
+            or self.pending_hand_target is not None
+            or self.deadman_controller_anchor is not None
+            or self.deadman_robot_anchor is not None
+        ):
+            self._reset_hand_target_pursuit()
+
     def _on_hand_target(self, message: PoseStamped) -> None:
         if not self.hand_target_active:
-            controller_anchor = self._apply_hand_target_adjustments(message)
+            controller_anchor = self._scale_hand_target(message)
             if not _normalize_quaternion(controller_anchor.pose.orientation):
                 self._warn_throttled(
                     "invalid_deadman_anchor",
@@ -159,7 +171,7 @@ class ArmMovementMixin:
         if not self.hand_target_active or self.pending_hand_target is None:
             return
 
-        controller_pose = self._apply_hand_target_adjustments(
+        controller_pose = self._scale_hand_target(
             self.pending_hand_target
         )
         if not _normalize_quaternion(controller_pose.pose.orientation):
@@ -183,7 +195,7 @@ class ArmMovementMixin:
             self.pending_hand_target = None
             return
 
-        if not self._servo_pose_mode_ready():
+        if not self._servo_twist_mode_ready():
             return
 
         self._servo_pose_publisher.publish(target)
@@ -255,12 +267,12 @@ class ArmMovementMixin:
             self._servo_tf_buffer,
             self,
         )
-        self._servo_pose_selected = False
+        self._servo_twist_selected = False
         self._servo_switch_in_flight = False
 
-    def _servo_pose_mode_ready(self) -> bool:
+    def _servo_twist_mode_ready(self) -> bool:
         self._ensure_servo_interfaces()
-        if self._servo_pose_selected:
+        if self._servo_twist_selected:
             return True
         if self._servo_switch_in_flight:
             return False
@@ -281,7 +293,7 @@ class ArmMovementMixin:
             return False
 
         request = ServoCommandType.Request()
-        request.command_type = ServoCommandType.Request.POSE
+        request.command_type = ServoCommandType.Request.TWIST
         self._servo_switch_in_flight = True
         future = self._servo_switch_command_type_client.call_async(request)
         future.add_done_callback(self._on_servo_command_type_response)
@@ -300,13 +312,13 @@ class ArmMovementMixin:
         if not response.success:
             self._warn_throttled(
                 "servo_switch_rejected",
-                "MoveIt Servo rejected POSE command mode",
+                "MoveIt Servo rejected TWIST command mode",
                 2.0,
             )
             return
 
-        self._servo_pose_selected = True
-        self.get_logger().info("MoveIt Servo POSE command mode selected")
+        self._servo_twist_selected = True
+        self.get_logger().info("MoveIt Servo TWIST command mode selected")
 
     def _map_controller_delta_to_robot(
         self,
@@ -342,17 +354,11 @@ class ArmMovementMixin:
         )
         return target
 
-    def _apply_hand_target_adjustments(self, message: PoseStamped) -> PoseStamped:
+    def _scale_hand_target(self, message: PoseStamped) -> PoseStamped:
         target = _copy_pose_stamped(message)
-        target.pose.position.x = (
-            target.pose.position.x * self.hand_position_scale[0]
-        ) + self.hand_position_offset[0]
-        target.pose.position.y = (
-            target.pose.position.y * self.hand_position_scale[1]
-        ) + self.hand_position_offset[1]
-        target.pose.position.z = (
-            target.pose.position.z * self.hand_position_scale[2]
-        ) + self.hand_position_offset[2]
+        target.pose.position.x *= self.hand_position_scale[0]
+        target.pose.position.y *= self.hand_position_scale[1]
+        target.pose.position.z *= self.hand_position_scale[2]
         return target
 
     def _constrain_hand_target_to_workspace(

@@ -68,10 +68,56 @@ def _multiply_quaternions(left: Quaternion, right: Quaternion) -> Quaternion:
     return result
 
 
-def _clamp(value: float, limit: float) -> float:
-    if limit <= 0.0:
-        return value
-    return max(-limit, min(limit, value))
+def _vector_norm(vector: tuple[float, float, float]) -> float:
+    return math.sqrt(sum(component * component for component in vector))
+
+
+def _clamp_vector(
+    vector: tuple[float, float, float],
+    limit: float,
+) -> tuple[float, float, float]:
+    norm = _vector_norm(vector)
+    if limit <= 0.0 or norm <= limit or norm < 1e-12:
+        return vector
+
+    scale = limit / norm
+    return tuple(component * scale for component in vector)
+
+
+def _filtered_vector(
+    previous: tuple[float, float, float],
+    current: tuple[float, float, float],
+    alpha: float,
+) -> tuple[float, float, float]:
+    weight = max(0.0, min(1.0, alpha))
+    return tuple(
+        (weight * current_component)
+        + ((1.0 - weight) * previous_component)
+        for previous_component, current_component in zip(previous, current)
+    )
+
+
+def _pose_feedback(
+    error: tuple[float, float, float],
+    gain: float,
+    deadband: float,
+) -> tuple[float, float, float]:
+    if _vector_norm(error) < max(0.0, deadband):
+        return (0.0, 0.0, 0.0)
+    return tuple(component * gain for component in error)
+
+
+def _copy_pose(message: PoseStamped) -> PoseStamped:
+    copy = PoseStamped()
+    copy.header = message.header
+    copy.pose.position.x = message.pose.position.x
+    copy.pose.position.y = message.pose.position.y
+    copy.pose.position.z = message.pose.position.z
+    copy.pose.orientation.x = message.pose.orientation.x
+    copy.pose.orientation.y = message.pose.orientation.y
+    copy.pose.orientation.z = message.pose.orientation.z
+    copy.pose.orientation.w = message.pose.orientation.w
+    return copy
 
 
 class ServoPoseBridge(Node):
@@ -125,9 +171,40 @@ class ServoPoseBridge(Node):
         self.orientation_deadband_rad = float(
             self.declare_parameter("orientation_deadband_rad", 0.01).value
         )
+        self.linear_feedforward_gain = float(
+            self.declare_parameter("linear_feedforward_gain", 1.0).value
+        )
+        self.angular_feedforward_gain = float(
+            self.declare_parameter("angular_feedforward_gain", 1.0).value
+        )
+        self.feedforward_filter_alpha = float(
+            self.declare_parameter("feedforward_filter_alpha", 0.35).value
+        )
+        self.feedforward_timeout_sec = float(
+            self.declare_parameter("feedforward_timeout_sec", 0.08).value
+        )
+        self.feedforward_reset_gap_sec = float(
+            self.declare_parameter("feedforward_reset_gap_sec", 0.15).value
+        )
+        self.linear_feedforward_stop_velocity_mps = float(
+            self.declare_parameter(
+                "linear_feedforward_stop_velocity_mps",
+                0.005,
+            ).value
+        )
+        self.angular_feedforward_stop_velocity_radps = float(
+            self.declare_parameter(
+                "angular_feedforward_stop_velocity_radps",
+                0.02,
+            ).value
+        )
 
         self.latest_target: Optional[PoseStamped] = None
         self.latest_target_received_sec = 0.0
+        self.previous_target: Optional[PoseStamped] = None
+        self.previous_target_received_sec = 0.0
+        self.target_linear_velocity = (0.0, 0.0, 0.0)
+        self.target_angular_velocity = (0.0, 0.0, 0.0)
         self.servo_started = False
         self.start_request_in_flight = False
         self.last_start_attempt_sec = 0.0
@@ -168,9 +245,7 @@ class ServoPoseBridge(Node):
             )
             return
 
-        target = PoseStamped()
-        target.header = message.header
-        target.pose = message.pose
+        target = _copy_pose(message)
         if not _normalize_quaternion(target.pose.orientation):
             self._warn_throttled(
                 "pose_quaternion",
@@ -179,8 +254,10 @@ class ServoPoseBridge(Node):
             )
             return
 
+        now_sec = self._now_sec()
+        self._update_target_velocity(target, now_sec)
         self.latest_target = target
-        self.latest_target_received_sec = self._now_sec()
+        self.latest_target_received_sec = now_sec
 
     def _update(self) -> None:
         if not self._ensure_servo_started():
@@ -193,6 +270,9 @@ class ServoPoseBridge(Node):
             > self.target_timeout_sec
         ):
             self.latest_target = None
+            self.previous_target = None
+            self.target_linear_velocity = (0.0, 0.0, 0.0)
+            self.target_angular_velocity = (0.0, 0.0, 0.0)
             return
 
         try:
@@ -220,30 +300,146 @@ class ServoPoseBridge(Node):
             )
             return
 
-        command = TwistStamped()
-        command.header.stamp = self.get_clock().now().to_msg()
-        command.header.frame_id = self.planning_frame
-        command.twist.linear.x = self._linear_command(
+        linear_error = (
             self.latest_target.pose.position.x
-            - transform.transform.translation.x
-        )
-        command.twist.linear.y = self._linear_command(
+            - transform.transform.translation.x,
             self.latest_target.pose.position.y
-            - transform.transform.translation.y
-        )
-        command.twist.linear.z = self._linear_command(
+            - transform.transform.translation.y,
             self.latest_target.pose.position.z
-            - transform.transform.translation.z
+            - transform.transform.translation.z,
         )
-
         angular_error = self._orientation_error(
             self.latest_target.pose.orientation,
             current_orientation,
         )
-        command.twist.angular.x = self._angular_command(angular_error[0])
-        command.twist.angular.y = self._angular_command(angular_error[1])
-        command.twist.angular.z = self._angular_command(angular_error[2])
+
+        linear_command = _pose_feedback(
+            linear_error,
+            self.linear_gain,
+            self.position_deadband_m,
+        )
+        angular_command = _pose_feedback(
+            angular_error,
+            self.angular_gain,
+            self.orientation_deadband_rad,
+        )
+        target_age_sec = self._now_sec() - self.latest_target_received_sec
+        if (
+            self.feedforward_timeout_sec <= 0.0
+            or target_age_sec <= self.feedforward_timeout_sec
+        ):
+            linear_command = tuple(
+                feedback + (self.linear_feedforward_gain * feedforward)
+                for feedback, feedforward in zip(
+                    linear_command,
+                    self.target_linear_velocity,
+                )
+            )
+            angular_command = tuple(
+                feedback + (self.angular_feedforward_gain * feedforward)
+                for feedback, feedforward in zip(
+                    angular_command,
+                    self.target_angular_velocity,
+                )
+            )
+
+        linear_command = _clamp_vector(
+            linear_command,
+            self.max_linear_velocity_mps,
+        )
+        angular_command = _clamp_vector(
+            angular_command,
+            self.max_angular_velocity_radps,
+        )
+
+        command = TwistStamped()
+        command.header.stamp = self.get_clock().now().to_msg()
+        command.header.frame_id = self.planning_frame
+        command.twist.linear.x = linear_command[0]
+        command.twist.linear.y = linear_command[1]
+        command.twist.linear.z = linear_command[2]
+        command.twist.angular.x = angular_command[0]
+        command.twist.angular.y = angular_command[1]
+        command.twist.angular.z = angular_command[2]
         self.twist_publisher.publish(command)
+
+    def _update_target_velocity(
+        self,
+        target: PoseStamped,
+        now_sec: float,
+    ) -> None:
+        previous = self.previous_target
+        sample_period_sec = now_sec - self.previous_target_received_sec
+        valid_period = (
+            previous is not None
+            and sample_period_sec > 1e-4
+            and (
+                self.feedforward_reset_gap_sec <= 0.0
+                or sample_period_sec <= self.feedforward_reset_gap_sec
+            )
+        )
+        if valid_period:
+            raw_linear_velocity = (
+                (
+                    target.pose.position.x
+                    - previous.pose.position.x
+                )
+                / sample_period_sec,
+                (
+                    target.pose.position.y
+                    - previous.pose.position.y
+                )
+                / sample_period_sec,
+                (
+                    target.pose.position.z
+                    - previous.pose.position.z
+                )
+                / sample_period_sec,
+            )
+            raw_angular_delta = self._orientation_error(
+                target.pose.orientation,
+                previous.pose.orientation,
+            )
+            raw_angular_velocity = tuple(
+                component / sample_period_sec
+                for component in raw_angular_delta
+            )
+            raw_linear_velocity = _clamp_vector(
+                raw_linear_velocity,
+                self.max_linear_velocity_mps,
+            )
+            raw_angular_velocity = _clamp_vector(
+                raw_angular_velocity,
+                self.max_angular_velocity_radps,
+            )
+            if (
+                _vector_norm(raw_linear_velocity)
+                <= max(0.0, self.linear_feedforward_stop_velocity_mps)
+            ):
+                self.target_linear_velocity = (0.0, 0.0, 0.0)
+            else:
+                self.target_linear_velocity = _filtered_vector(
+                    self.target_linear_velocity,
+                    raw_linear_velocity,
+                    self.feedforward_filter_alpha,
+                )
+            if (
+                _vector_norm(raw_angular_velocity)
+                <= max(0.0, self.angular_feedforward_stop_velocity_radps)
+            ):
+                self.target_angular_velocity = (0.0, 0.0, 0.0)
+            else:
+                self.target_angular_velocity = _filtered_vector(
+                    self.target_angular_velocity,
+                    raw_angular_velocity,
+                    self.feedforward_filter_alpha,
+                )
+        else:
+            self.target_linear_velocity = (0.0, 0.0, 0.0)
+            self.target_angular_velocity = (0.0, 0.0, 0.0)
+
+        self.previous_target = _copy_pose(target)
+        self.previous_target_received_sec = now_sec
 
     def _ensure_servo_started(self) -> bool:
         if self.servo_started:
@@ -287,22 +483,6 @@ class ServoPoseBridge(Node):
 
         self.servo_started = True
         self.get_logger().info("MoveIt Servo started")
-
-    def _linear_command(self, error: float) -> float:
-        if abs(error) < self.position_deadband_m:
-            return 0.0
-        return _clamp(
-            error * self.linear_gain,
-            self.max_linear_velocity_mps,
-        )
-
-    def _angular_command(self, error: float) -> float:
-        if abs(error) < self.orientation_deadband_rad:
-            return 0.0
-        return _clamp(
-            error * self.angular_gain,
-            self.max_angular_velocity_radps,
-        )
 
     @staticmethod
     def _orientation_error(

@@ -696,6 +696,7 @@ MonoBehaviour:
   wristRotationOffsetEuler: {x: 0, y: 0, z: 0}
   recalibrateWristKey: 114
   wristPositionScale: 1
+  useHeadsetRelativeWristWorkspace: 1
   requireWristDeadman: 1
   wristDeadmanTriggerThreshold: 0.15
   recordControllerPoseOnStart: 0

@@ -96,7 +96,7 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
 - `image_listener/image_subscriber.py`: ROS2 image subscriber for `/head_front_camera/rgb/image_raw`.
 - `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
-- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose`, `/vive/hand_target_pose`, and `/vive/gripper_opening`.
+- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose`, `/vive/hand_target_pose`, `/vive/hand_target_active`, and `/vive/gripper_opening`.
 - `image_listener/robot_state.py`: live robot head, wrist, and gripper snapshot provider used to initialize debug input safely.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
@@ -175,6 +175,7 @@ When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages
 
 - `/vive/head_pose`: `geometry_msgs/PoseStamped` copied from the HMD pose.
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped` using the joystick wrist position and calibrated `robotWristR*` orientation.
+- `/vive/hand_target_active`: `std_msgs/Bool` deadman state, published on every wrist sample so release is immediate rather than inferred only from a timeout.
 - `/vive/gripper_opening`: `std_msgs/Float64` normalized opening, where `0` is closed and `1` is fully open.
 
 ## MoveIt server
@@ -196,8 +197,10 @@ Default behavior:
 - Applies a `0.002` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
 - Uses MoveIt Servo group `arm` by default so `torso_lift_joint` is not used.
-- Treats the trigger/side-grip input as a deadman clutch. Each press anchors the current controller pose to the current robot wrist pose from TF, so pressing the button while the controller is elsewhere does not move the arm.
+- Treats the trigger/side-grip input as a deadman clutch. Each press records the current headset position and yaw, controller pose, and robot wrist pose from TF, so pressing the button while the controller is elsewhere does not move the arm.
+- Measures controller motion in the headset frame recorded at the deadman press. Later headset translation, pitch, roll, or yaw does not steer the arm, so the operator can keep looking around while commanding the wrist.
 - Applies only controller translation and rotation accumulated after the current deadman press. Releasing the button clears the target and clutch anchors.
+- Clears clutch state immediately from `/vive/hand_target_active`; `hand_target_timeout_sec` remains the fallback for a lost WebRTC stream.
 - Keeps only the newest hand target. New samples replace the previous target instead of being replayed as a movement queue.
 - Publishes absolute wrist targets on `/servo_node/pose_target_cmds`. On Humble, `servo_pose_bridge` converts pose error into bounded Cartesian velocity commands on `/servo_node/delta_twist_cmds`.
 - Starts Servo through `/servo_node/start_servo`; Servo consumes live `/joint_states` and publishes `trajectory_msgs/JointTrajectory` commands to `/arm_controller/joint_trajectory`.
@@ -225,12 +228,14 @@ Teleop parameters live in `moveit_server/src/vive_moveit_server/config/tiago_sin
 - `gripper_command_duration_sec`: minimum trajectory duration, configured as `0.15` seconds.
 - `gripper_max_velocity_mps`: extends the trajectory duration when required to keep finger motion at or below `0.04` m/s.
 - `hand_target_timeout_sec`: time without a gated hand target before the deadman is considered released. It is configured as `0.12` seconds.
+- `hand_target_active_topic`: explicit deadman state topic, configured as `/vive/hand_target_active`.
 - `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: workspace limits applied before Servo.
-- `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
+- `hand_position_scale`: per-axis calibration of controller displacement. A constant position offset is intentionally not exposed because clutch-relative subtraction would cancel it.
 - `move_group_name`, `planning_frame`, `ee_frame_name`, `robot_link_command_frame`, and `command_out_topic` in `tiago_servo.yaml`: define Servo's robot group, frames, and arm controller output.
 - `publish_period`, `incoming_command_timeout`, singularity thresholds, collision thresholds, and `joint_limit_margin` in `tiago_servo.yaml`: control Servo timing and safety behavior.
 - `hand_position_scale` defaults to `[1.0, 1.0, 1.0]`, so controller translation after clutching maps one-to-one to robot wrist translation.
-- `linear_gain`, `angular_gain`, velocity limits, and pose deadbands in `servo_pose_bridge.yaml`: tune how aggressively the Humble pose bridge follows the latest wrist target. The defaults use a 100 Hz bridge, a `0.50` m/s Cartesian cap, and a `1.50` rad/s angular cap.
+- `linear_gain`, `angular_gain`, velocity limits, and pose deadbands in `servo_pose_bridge.yaml`: tune how aggressively the Humble pose bridge corrects residual wrist pose error.
+- `linear_feedforward_gain`, `angular_feedforward_gain`, `feedforward_filter_alpha`, stop thresholds, and feed-forward timeouts in `servo_pose_bridge.yaml`: use consecutive target poses to reduce steady tracking lag. Feed-forward stops immediately with a stationary target, expires before the deadman timeout, and all commands are limited by total linear/angular vector magnitude.
 
 Useful Servo health checks:
 
@@ -377,15 +382,22 @@ By default the input payload includes:
 `joystickGrip` is telemetry only. The current Unity client does not populate `gripperAvailable` or `gripperOpening`, so it does not actuate the robot gripper.
 
 Hold the Vive trigger or side-grip button to command the robot wrist. On every
-press, the teleop server anchors that controller pose to the robot's current
-wrist pose. Holding the controller still causes no movement; only translation
-and rotation after the press are applied. Release the button to clear the
-target and clutch state. The next press creates new anchors from the robot's
-then-current wrist pose.
+press, Unity records the current headset position and yaw and the current
+controller pose. The ROS server independently anchors the incoming target to
+the robot's measured wrist pose from TF. Controller motion is then mapped
+one-to-one in the fixed headset frame captured at the press. Moving or rotating
+the headset afterward does not change the arm target, so looking around remains
+independent from wrist control. Release the button to clear the target and
+clutch state. The next press captures a new headset/controller frame and the
+robot's then-current wrist pose.
 
-Press `R` in the Unity player to re-anchor the current controller pose to the current robot wrist target. If the joystick is represented by a custom tracked GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`; otherwise the right-hand XR node is used.
+Press `R` in the Unity player to request a new headset/controller workspace
+anchor. The new anchor is captured when valid headset, controller, and robot
+wrist states are available. If the joystick is represented by a custom tracked
+GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`;
+otherwise the right-hand XR node is used.
 
-Press `Space` or the Vive controller menu button to start or stop local 6-DoF recording. Each line in the output `.jsonl` file is the same `unity_teleop_pose` JSON object sent over WebRTC, including wrist XYZ, quaternion, calibrated robot quaternion, and controller values. On Linux, recordings default to:
+Press `Space` or the Vive controller menu button to start or stop local 6-DoF recording. Each line in the output `.jsonl` file is the same `unity_teleop_pose` JSON object sent over WebRTC, including wrist XYZ, quaternion, calibrated robot quaternion, workspace mode, captured headset anchor pose, position scale, and controller values. On Linux, recordings default to:
 
 ```text
 ~/.config/unity3d/DefaultCompany/unity-vr-headset/ViveTeleopRecordings/
