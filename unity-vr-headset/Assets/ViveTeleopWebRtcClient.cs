@@ -735,9 +735,11 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             return true;
         }
 
-        if (preferOpenVrControllerTracking && OpenVR.System != null)
+        if (preferOpenVrControllerTracking &&
+            OpenVR.System != null &&
+            TryGetOpenVrWristPose(out wristPose, out joystickState))
         {
-            return TryGetOpenVrWristPose(out wristPose, out joystickState);
+            return true;
         }
 
         xrWristDevices.Clear();

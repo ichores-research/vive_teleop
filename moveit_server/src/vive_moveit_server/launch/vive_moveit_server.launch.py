@@ -1,5 +1,6 @@
 import os
 
+import yaml
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
@@ -12,6 +13,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from moveit_configs_utils import MoveItConfigsBuilder
 
 
 TIAGO_VARIANT_ARGUMENTS = (
@@ -128,51 +130,72 @@ def include_optional_robot_description_launch(context, *args, **kwargs):
     ]
 
 
-def include_optional_moveit_launch(context, *args, **kwargs):
-    enabled = LaunchConfiguration("moveit_launch_enabled").perform(context)
+def launch_optional_moveit_servo(context, *args, **kwargs):
+    enabled = LaunchConfiguration("servo_launch_enabled").perform(context)
     if not is_truthy(enabled):
         return [
             LogInfo(
-                msg="MoveIt launch include disabled; vive_moveit_server will wait for an external MoveGroup action server."
+                msg="MoveIt Servo launch disabled; vive_moveit_server requires an external Servo node."
             )
         ]
 
-    package = LaunchConfiguration("moveit_launch_package").perform(context)
-    launch_file = LaunchConfiguration("moveit_launch_file").perform(context)
-    if not launch_file:
+    servo_params_file = LaunchConfiguration("servo_params_file").perform(context)
+    try:
+        with open(servo_params_file, "r", encoding="utf-8") as stream:
+            servo_parameters = yaml.safe_load(stream)
+    except (OSError, yaml.YAMLError) as error:
         return [
             LogInfo(
-                msg="No MoveIt launch file configured; vive_moveit_server will wait for an external MoveGroup action server."
+                msg=f"Could not load MoveIt Servo parameters "
+                f"'{servo_params_file}': {error}"
             )
         ]
 
-    launch_path, messages = launch_path_or_message(
-        package,
-        launch_file,
-        lambda reason: (
-            reason
-            + "; vive_moveit_server will wait for an external MoveGroup action server."
-        ),
-    )
-    if launch_path is None:
-        return messages
+    def effective_argument(name, fallback):
+        return LaunchConfiguration(name).perform(context) or fallback
 
-    included_arguments = []
-    for local_name, included_name in (
-        ("moveit_allow_trajectory_execution", "allow_trajectory_execution"),
-        ("moveit_publish_monitored_planning_scene", "publish_monitored_planning_scene"),
-        ("moveit_arm", "arm"),
-        *TIAGO_VARIANT_ARGUMENTS,
-        ("moveit_use_sensor_manager", "use_sensor_manager"),
-    ):
-        launch_argument = optional_launch_argument(context, local_name, included_name)
-        if launch_argument is not None:
-            included_arguments.append(launch_argument)
+    srdf_file_path = os.path.join(
+        get_package_share_directory("tiago_moveit_config"),
+        "config",
+        "srdf",
+        "tiago.srdf.xacro",
+    )
+    srdf_mappings = {
+        "arm_type": effective_argument("moveit_arm_type", "tiago-arm"),
+        "end_effector": effective_argument(
+            "moveit_end_effector",
+            "pal-gripper",
+        ),
+        "ft_sensor": effective_argument("moveit_ft_sensor", "schunk-ft"),
+        "base_type": effective_argument("moveit_base_type", "pmb2"),
+    }
+    moveit_config = (
+        MoveItConfigsBuilder("tiago")
+        .robot_description_semantic(
+            file_path=srdf_file_path,
+            mappings=srdf_mappings,
+        )
+        .robot_description_kinematics(
+            file_path="config/kinematics_kdl.yaml"
+        )
+        .joint_limits(file_path="config/joint_limits.yaml")
+        .to_moveit_configs()
+    )
 
     return [
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(launch_path),
-            launch_arguments=included_arguments,
+        Node(
+            package="moveit_servo",
+            executable="servo_node_main",
+            name="servo_node",
+            output="screen",
+            parameters=[
+                {"moveit_servo": servo_parameters},
+                {"robot_description": "", "robot_description_timeout": 60.0},
+                moveit_config.robot_description_semantic,
+                moveit_config.robot_description_kinematics,
+                moveit_config.joint_limits,
+                {"use_sim_time": LaunchConfiguration("moveit_use_sim_time")},
+            ],
         )
     ]
 
@@ -185,6 +208,13 @@ def generate_launch_description():
             "tiago_single_params.yaml",
         ]
     )
+    default_servo_params = PathJoinSubstitution(
+        [
+            FindPackageShare("vive_moveit_server"),
+            "config",
+            "tiago_servo.yaml",
+        ]
+    )
 
     return LaunchDescription(
         [
@@ -194,29 +224,24 @@ def generate_launch_description():
                 description="YAML parameter file for vive_moveit_server.",
             ),
             DeclareLaunchArgument(
-                "moveit_launch_enabled",
+                "servo_launch_enabled",
                 default_value="true",
-                description="Start the configured ROS2 MoveIt move_group launch before teleop.",
+                description="Start MoveIt Servo for Cartesian arm teleoperation.",
             ),
             DeclareLaunchArgument(
-                "moveit_launch_package",
-                default_value="tiago_moveit_config",
-                description="MoveIt config package to include before teleop.",
-            ),
-            DeclareLaunchArgument(
-                "moveit_launch_file",
-                default_value="move_group.launch.py",
-                description="MoveIt launch file name or absolute path.",
+                "servo_params_file",
+                default_value=default_servo_params,
+                description="YAML parameter file passed to MoveIt Servo.",
             ),
             DeclareLaunchArgument(
                 "robot_description_launch_enabled",
                 default_value="true",
-                description="Start the configured robot_state_publisher launch so MoveIt receives /robot_description.",
+                description="Start robot_state_publisher so Servo receives the robot description and TF.",
             ),
             DeclareLaunchArgument(
                 "robot_description_launch_package",
                 default_value="tiago_description",
-                description="Robot description package to include before MoveIt.",
+                description="Robot description package to include before Servo.",
             ),
             DeclareLaunchArgument(
                 "robot_description_launch_file",
@@ -224,44 +249,29 @@ def generate_launch_description():
                 description="Robot description launch file name or absolute path.",
             ),
             DeclareLaunchArgument(
-                "moveit_allow_trajectory_execution",
-                default_value="False",
-                description="Forwarded to MoveIt move_group; false keeps execution in vive_moveit_server controller-topic mode.",
-            ),
-            DeclareLaunchArgument(
-                "moveit_publish_monitored_planning_scene",
-                default_value="True",
-                description="Forwarded to MoveIt move_group.",
-            ),
-            DeclareLaunchArgument(
                 "moveit_use_sim_time",
                 default_value="False",
-                description="Forwarded to MoveIt move_group.",
-            ),
-            DeclareLaunchArgument(
-                "moveit_arm",
-                default_value="",
-                description="Optional arm forwarded to the included TIAGo MoveIt launch.",
+                description="Forwarded to robot description and MoveIt Servo.",
             ),
             DeclareLaunchArgument(
                 "moveit_arm_type",
                 default_value="",
-                description="Optional arm_type forwarded to the included TIAGo MoveIt launch.",
+                description="Optional arm_type forwarded to TIAGo description and Servo.",
             ),
             DeclareLaunchArgument(
                 "moveit_base_type",
                 default_value="",
-                description="Optional base_type forwarded to the included TIAGo MoveIt launch.",
+                description="Optional base_type forwarded to TIAGo description and Servo.",
             ),
             DeclareLaunchArgument(
                 "moveit_end_effector",
                 default_value="",
-                description="Optional end_effector forwarded to the included TIAGo MoveIt launch.",
+                description="Optional end_effector forwarded to TIAGo description and Servo.",
             ),
             DeclareLaunchArgument(
                 "moveit_ft_sensor",
                 default_value="",
-                description="Optional ft_sensor forwarded to the included TIAGo MoveIt launch.",
+                description="Optional ft_sensor forwarded to TIAGo description and Servo.",
             ),
             DeclareLaunchArgument(
                 "moveit_wrist_model",
@@ -298,13 +308,8 @@ def generate_launch_description():
                 default_value="",
                 description="Optional gazebo_version forwarded to the included TIAGo robot description launch.",
             ),
-            DeclareLaunchArgument(
-                "moveit_use_sensor_manager",
-                default_value="",
-                description="Optional use_sensor_manager forwarded to the included TIAGo MoveIt launch.",
-            ),
             OpaqueFunction(function=include_optional_robot_description_launch),
-            OpaqueFunction(function=include_optional_moveit_launch),
+            OpaqueFunction(function=launch_optional_moveit_servo),
             Node(
                 package="vive_moveit_server",
                 executable="vive_moveit_server",

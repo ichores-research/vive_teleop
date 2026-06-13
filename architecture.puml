@@ -26,18 +26,19 @@ node "Robot network\n10.68.0.0/24" as Net {
     component "RobotInputState\nROS2 node" as RobotInputState
     queue "ROS2 topic\n/vive/head_pose" as HeadPoseTopic
     queue "ROS2 topic\n/vive/hand_target_pose" as HandTargetTopic
+    queue "ROS2 topic\n/vive/hand_deadman" as HandDeadmanTopic
     queue "ROS2 topic\n/vive/gripper_opening" as GripperOpeningTopic
   }
 
   node "moveit_server container\n10.68.0.134" as MoveItContainer {
     component "robot_state_publisher\nTIAGo description" as RobotStatePublisher
-    component "move_group\nTIAGo MoveIt config" as MoveGroup
-    component "vive_moveit_server\nPython ROS2 node\nexecution_mode=ik_topic" as MoveItServer
+    component "MoveIt Servo\narm group + planning scene" as MoveItServo
+    component "vive_moveit_server\nPython ROS2 node\nServo-only" as MoveItServer
     queue "ROS2 topic\n/joint_states" as JointStateTopic
+    queue "ROS2 topic\n/servo_node/delta_twist_cmds" as ServoTwistTopic
     queue "ROS2 topic\n/head_controller/joint_trajectory" as HeadCommandTopic
     queue "ROS2 topic\n/arm_controller/joint_trajectory" as ArmCommandTopic
     queue "ROS2 topic\n/gripper_controller/joint_trajectory" as GripperCommandTopic
-    interface "ROS2 service\n/compute_ik" as ComputeIkService
   }
 
   node "coturn container\n10.68.0.133:3478" as Coturn {
@@ -61,18 +62,21 @@ WebRTCServer --> InputPublisher : data-channel JSON messages
 WebRTCServer --> RobotInputState : GET /robot_state
 InputPublisher --> HeadPoseTopic : geometry_msgs/PoseStamped
 InputPublisher --> HandTargetTopic : geometry_msgs/PoseStamped
+InputPublisher --> HandDeadmanTopic : std_msgs/Bool
 InputPublisher --> GripperOpeningTopic : std_msgs/Float64\nnormalized 0..1
 HeadPoseTopic --> MoveItServer : raw HMD PoseStamped
 HandTargetTopic --> MoveItServer : wrist pose target
+HandDeadmanTopic --> MoveItServer : false stops immediately
 GripperOpeningTopic --> MoveItServer : normalized finger opening
-JointStateTopic --> MoveItServer : IK seed state
+JointStateTopic --> MoveItServer : gripper feedback
+JointStateTopic --> MoveItServo : arm feedback
 RobotJointStates --> RobotInputState : head + finger positions
-RobotStatePublisher --> MoveGroup : robot_description + TF
+RobotStatePublisher --> MoveItServo : robot_description + TF
 RobotStatePublisher --> RobotInputState : wrist + head TF
-MoveGroup -- ComputeIkService : provides
-MoveItServer --> ComputeIkService : moveit_msgs/GetPositionIK\narm group, arm_tool_link
 MoveItServer --> HeadCommandTopic : head_1_joint + head_2_joint\n20 Hz, deadband, 90% limits
-MoveItServer --> ArmCommandTopic : short JointTrajectory commands\nwarmup + joint delta clamp
+MoveItServer --> ServoTwistTopic : target feedback\nTwistStamped at 50 Hz
+ServoTwistTopic --> MoveItServo : Cartesian velocity
+MoveItServo --> ArmCommandTopic : position-only JointTrajectory
 MoveItServer --> GripperCommandTopic : synchronized finger targets\n0..0.045 m, velocity-limited
 
 StaticServer --> Browser : serves index.html
@@ -97,13 +101,14 @@ note right of MoveItServer
   Default teleop path:
   - HMD yaw/pitch -> head pan/tilt
   - publishes /head_controller/joint_trajectory
-  - arm-only MoveIt group
+  - held Unity robot target -> Cartesian pose error
+  - publishes /servo_node/delta_twist_cmds
+  - MoveIt Servo arm group
   - torso_lift_joint locked out
-  - seeded /compute_ik from /joint_states
-  - publishes /arm_controller/joint_trajectory
+  - Servo owns singularity/joint-limit handling
+  - Servo publishes /arm_controller/joint_trajectory
   - normalized gripper opening -> two finger joints
   - publishes /gripper_controller/joint_trajectory
-  - retries -31 with last reachable orientation
 end note
 
 note bottom of Net

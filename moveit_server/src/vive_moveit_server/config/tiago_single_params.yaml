@@ -1,7 +1,5 @@
 vive_moveit_server:
   ros__parameters:
-    # Use the arm-only group so IK/planning cannot use torso_lift_joint.
-    arm_group: arm
     end_effector_link: arm_tool_link
 
     head_input_topic: /vive/head_pose
@@ -24,17 +22,7 @@ vive_moveit_server:
     head_pan_sign: -1.0
     head_tilt_sign: -1.0
     hand_target_topic: /vive/hand_target_pose
-    move_group_action_name: /move_action
-
-    # "ik_topic" uses MoveIt's seeded IK service for small 6-DoF joystick
-    # updates, then publishes short JointTrajectory commands.
-    # "trajectory_topic" asks MoveIt to plan, then publishes the planned
-    # JointTrajectory segments to ROS2 controller topics.
-    # Use "moveit" only when ROS2 controller actions are available to MoveIt.
-    # "plan_only" validates planning without commanding the robot.
-    execution_mode: ik_topic
-    arm_command_topic: /arm_controller/joint_trajectory
-    torso_command_topic: /torso_controller/joint_trajectory
+    hand_deadman_topic: /vive/hand_deadman
     gripper_input_topic: /vive/gripper_opening
     gripper_command_topic: /gripper_controller/joint_trajectory
     gripper_joint_names:
@@ -49,69 +37,31 @@ vive_moveit_server:
     gripper_command_duration_sec: 0.15
     gripper_max_velocity_mps: 0.04
     joint_state_topic: /joint_states
-    ik_service_name: /compute_ik
-    fk_service_name: /compute_fk
-    async_execution: true
-    plan_only: true
+    servo_cartesian_command_topic: /servo_node/delta_twist_cmds
+    servo_status_topic: /servo_node/status
+    servo_start_service_name: /servo_node/start_servo
+    # Match the measured 50 Hz robot joint-state feedback rate.
+    servo_publish_rate_hz: 50.0
+    # High-gain pose tracking with speed and acceleration bounds. MoveIt Servo
+    # additionally scales motion near joint limits, singularities, and collisions.
+    servo_linear_gain: 6.0
+    servo_angular_gain: 5.0
+    servo_max_linear_velocity_mps: 0.45
+    servo_max_angular_velocity_radps: 1.8
+    servo_max_linear_acceleration_mps2: 2.5
+    servo_max_angular_acceleration_radps2: 8.0
 
-    # The server treats incoming hand target coordinates as this robot frame.
-    # Adjust calibration/offsets below if your Unity frame is not already aligned.
+    # Unity publishes calibrated absolute targets in this robot frame. Each
+    # hold is offset to the current TF wrist pose before Servo tracks it.
     pose_reference_frame: base_footprint
 
-    planning_time_sec: 0.15
-    max_velocity_scaling_factor: 0.25
-    max_acceleration_scaling_factor: 0.25
-    min_plan_interval_sec: 0.04
-    # Input is normally about 25 Hz. After three missed samples, treat the
-    # deadman as released, clear pursuit state, and wait for a new stream.
-    hand_target_timeout_sec: 0.12
-    # Each deadman press anchors the current controller pose to the current
-    # robot wrist pose. Only controller movement after that press is applied.
-    # The resulting target is pursued through reachable Cartesian increments.
-    cartesian_position_step_m: 0.02
-    cartesian_orientation_step_rad: 0.12
+    # Explicit /vive/hand_deadman=false stops immediately. This timeout is the
+    # fallback for a lost WebRTC/DDS stream. Leave margin above the 50 Hz input.
+    hand_target_timeout_sec: 0.25
     position_deadband_m: 0.002
     orientation_deadband_rad: 0.01
-    goal_position_tolerance_m: 0.015
-    goal_orientation_tolerance_rad: 0.08
-    num_planning_attempts: 1
-    wait_for_move_group_timeout_sec: 0.0
     max_hand_target_distance_m: 1.5
     min_hand_target_z_m: 0.2
     max_hand_target_z_m: 1.6
-    ik_timeout_sec: 0.03
-    ik_avoid_collisions: false
-    # Keep each command alive for two nominal 25 Hz update periods so solver,
-    # DDS, and controller jitter do not create gaps between trajectories.
-    command_duration_sec: 0.08
-    max_joint_delta_rad: 0.06
-    # Keep light filtering for VR/IK noise without adding a large EMA delay.
-    joint_smoothing_alpha: 0.75
-    joint_command_deadband_rad: 0.003
-    # Repeated IK must use the previous command endpoint as its seed. Seeding
-    # from delayed measured joints can pull pick_ik backward on every update.
-    ik_seed_from_commanded_state: true
-    # Fall back to measured joints if the planned command stream gets too far
-    # ahead of the physical arm.
-    ik_command_resync_threshold_rad: 0.25
-    # Reject a different IK branch rather than clamping and chasing it slowly.
-    ik_solution_jump_threshold_rad: 0.35
-    ik_slow_request_warn_sec: 0.025
-    ik_warmup_sec: 0.5
-    ik_warmup_min_scale: 0.5
-    ik_warmup_reset_after_sec: 2.0
-    ik_retry_last_orientation_on_no_solution: true
-
     hand_position_scale: [1.0, 1.0, 1.0]
     hand_position_offset: [0.0, 0.0, 0.0]
-
-    arm_joint_names:
-      - arm_1_joint
-      - arm_2_joint
-      - arm_3_joint
-      - arm_4_joint
-      - arm_5_joint
-      - arm_6_joint
-      - arm_7_joint
-    torso_joint_names:
-      - torso_lift_joint

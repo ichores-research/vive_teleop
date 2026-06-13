@@ -1,6 +1,6 @@
 # vive_teleop
 
-`vive_teleop` connects directly to the robot's ROS2 graph, serves the camera over WebRTC, accepts WebRTC input, turns HMD pose into TIAGo head controller commands, turns wrist pose targets into TIAGo arm controller commands through MoveIt IK, and controls the two-finger gripper.
+`vive_teleop` connects directly to the robot's ROS2 graph, serves the camera over WebRTC, accepts WebRTC input, turns HMD pose into TIAGo head controller commands, tracks wrist pose targets through MoveIt Servo, and controls the two-finger gripper.
 
 The Unity VR client is still the intended headset frontend, but `index.html` can be used as a lightweight browser debug client without launching Unity or SteamVR.
 
@@ -87,7 +87,7 @@ Arm control remains disabled until `/joint_states` has a robot publisher.
 The current system has four main pieces:
 
 - `ros2_app`: ROS2 Humble application. It subscribes directly to the robot's `/head_front_camera/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
-- `moveit_server`: ROS2 teleoperation node. It converts raw HMD orientation into head trajectories, uses seeded MoveIt IK for wrist updates, and publishes direct two-finger gripper trajectories.
+- `moveit_server`: ROS2 teleoperation node. It converts raw HMD orientation into head trajectories, drives the arm through MoveIt Servo, and publishes direct two-finger gripper trajectories.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
 
@@ -96,7 +96,7 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/webrtc_server.py`: aiohttp signaling, peer lifecycle, ICE config, media relay, and data-channel routing.
 - `image_listener/image_subscriber.py`: ROS2 image subscriber for `/head_front_camera/rgb/image_raw`.
 - `image_listener/video_track.py`: aiortc video track backed by the latest ROS image frame.
-- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose`, `/vive/hand_target_pose`, and `/vive/gripper_opening`.
+- `image_listener/input_publisher.py`: ROS2 publisher for typed WebRTC input messages on `/vive/head_pose`, `/vive/hand_target_pose`, `/vive/hand_deadman`, and `/vive/gripper_opening`.
 - `image_listener/robot_state.py`: live robot head, wrist, and gripper snapshot provider used to initialize debug input safely.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
@@ -175,11 +175,18 @@ When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages
 
 - `/vive/head_pose`: `geometry_msgs/PoseStamped` copied from the HMD pose.
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped` using the joystick wrist position and calibrated `robotWristR*` orientation.
+- `/vive/hand_deadman`: `std_msgs/Bool`, published on every wrist sample. `true` permits tracking; `false` stops it immediately.
 - `/vive/gripper_opening`: `std_msgs/Float64` normalized opening, where `0` is closed and `1` is fully open.
 
 ## MoveIt server
 
-The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app` and the robot. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, starts `robot_state_publisher`, and then starts the teleop node.
+The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app` and the robot. It starts `robot_state_publisher`, MoveIt Servo, and the Python teleop node. No separate planning or service-based IK process is launched.
+
+The teleop code is split at the arm-execution boundary:
+
+- `vive_moveit_server.py` owns ROS input, deadman/clutch target mapping, head commands, and gripper commands.
+- `servo_controller.py` owns live wrist TF feedback, pose-error control, velocity and acceleration limiting, Servo startup/status handling, and Cartesian twist output.
+- `pose_utils.py` contains shared pose and quaternion operations.
 
 Default behavior:
 
@@ -187,28 +194,25 @@ Default behavior:
 - Publishes head commands at a fixed 20 Hz, with overlapping `0.1` second trajectory points so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
 - Applies a `0.002` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
-- Uses `execution_mode: ik_topic`, which calls MoveIt's `/compute_ik` service instead of running a full OMPL plan for each interpolated input update.
-- Uses MoveIt group `arm` by default so `torso_lift_joint` is not used.
-- Seeds IK from live `/joint_states`, limited to the active MoveIt group joints so non-MoveIt joints from the robot do not crash MoveIt.
-- Publishes short `trajectory_msgs/JointTrajectory` commands directly to the robot's `/arm_controller/joint_trajectory` topic.
-- Treats the trigger/side-grip input as a deadman clutch. Each press anchors the current controller pose to the current robot wrist pose from MoveIt FK, so pressing the button while the controller is elsewhere does not move the arm.
-- Applies only controller translation and rotation accumulated after the current deadman press. Releasing the button clears the target, clutch anchors, IK pursuit state, and queued messages.
+- Streams Cartesian velocity commands to MoveIt Servo. There is no alternative IK or planning execution mode.
+- Uses Servo group `arm`, so `torso_lift_joint` is not used.
+- Starts MoveIt Servo with the TIAGo SRDF, KDL kinematics, joint limits, live planning scene, and singularity handling.
+- MoveIt Servo publishes `trajectory_msgs/JointTrajectory` commands directly to `/arm_controller/joint_trajectory`.
+- The ROS bridge publishes `/vive/hand_target_pose` only while Unity reports `wristCommandEnabled: true`. The separate `true` deadman sample arms tracking, and the next held pose starts it without depending on cross-topic callback order.
+- `/vive/hand_deadman=false` disarms tracking, publishes a zero twist, and clears buffered targets so delayed poses cannot restart motion.
+- Each new press waits for the first held pose, then fixes the controller pose and current robot wrist pose as anchors for that hold.
+- While held, only controller translation and rotation relative to those anchors are followed. Releasing immediately publishes a zero twist and clears both anchors; the next press creates new anchors.
+- The Unity trigger or side-grip button acts as the wrist deadman using the configured trigger threshold.
 - Keeps only the newest hand target. New samples replace the previous target instead of being replayed as a movement queue.
-- Evaluates the newest target at a nominal `0.04` second cadence and pursues it through bounded Cartesian IK increments.
-- Seeds repeated IK from the previous command endpoint rather than delayed measured joints, with a measured-state resynchronization guard if the physical arm falls too far behind.
-- Rejects IK solutions that jump to a distant joint-space branch instead of slowly chasing the discontinuity through the joint-delta limiter.
-- Publishes overlapping `0.08` second arm trajectory points at the nominal 25 Hz update rate so timing jitter does not leave command gaps.
-- Starts direct arm trajectories immediately on receipt instead of timestamping them on the host, avoiding clock-skew and transport-delay loss on the robot controller.
+- Sends controller poses and evaluates the newest target at 50 Hz using live `base_footprint -> arm_tool_link` TF feedback.
+- Converts position and orientation error into physical m/s and rad/s commands with configurable proportional gains, deadbands, velocity caps, and acceleration slew limits.
+- Servo reports singularity and joint-bound states; hard joint limits remain enforced.
 - Subscribes to normalized commands on `/vive/gripper_opening` and publishes synchronized, velocity-aware finger trajectories to `/gripper_controller/joint_trajectory`.
 - Suppresses the initial gripper command when the requested opening matches the measured robot state, then suppresses duplicate targets within the configured deadband.
-- Overlays TIAGo's `kinematics.yaml` with `moveit_server/tiago_pick_ik_kinematics.yaml`, using `pick_ik` in local, one-attempt mode for small repeated joystick moves.
-- Ramps IK output after startup or a pause with `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec` so the first stationary target does not jerk at the full joint-delta limit.
-- If exact 6-DoF IK returns `NO_IK_SOLUTION` (`-31`) and a previous reachable wrist orientation exists, it retries the same position with that last reachable orientation.
 
 Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_params.yaml`. For a real robot, check at least:
 
-- `arm_group`: currently `arm` to force no torso. `arm_torso` allows torso motion if you deliberately want it.
-- `end_effector_link`: the TIAGo wrist/tool link used for IK. The default is `arm_tool_link`.
+- `end_effector_link`: the TIAGo wrist/tool link tracked by Servo. The default is `arm_tool_link`.
 - `head_command_topic`: direct ROS2 trajectory topic for the head controller, default `/head_controller/joint_trajectory`.
 - `head_joint_names`: must match the robot's head joints, typically `head_1_joint` and `head_2_joint` for this TIAGo.
 - `head_publish_rate_hz` and `head_command_duration_sec`: head command rate and matching trajectory point duration. Defaults are `20.0` Hz and `0.1` seconds.
@@ -216,10 +220,14 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `head_pan_limits_rad`, `head_tilt_limits_rad`, and `head_limit_scale`: clamp output to a safe fraction of the real controller limits; default scale is `0.9`.
 - `head_pan_sign` and `head_tilt_sign`: sign calibration knobs if runtime testing shows Unity yaw or pitch inverted.
 - `pose_reference_frame`: defaults to `base_footprint`; adjust if your controller calibration publishes another robot frame.
-- `ik_service_name`: defaults to `/compute_ik`.
-- `fk_service_name`: defaults to `/compute_fk` and is used to capture the current robot wrist pose when the deadman is pressed.
+- `hand_deadman_topic`: explicit arm tracking gate, default `/vive/hand_deadman`.
 - `joint_state_topic`: defaults to `/joint_states`.
-- `arm_command_topic`: direct ROS2 trajectory topic for the arm controller, default `/arm_controller/joint_trajectory`.
+- `servo_cartesian_command_topic`: Cartesian velocity input for Servo, default `/servo_node/delta_twist_cmds`.
+- `servo_status_topic`: Servo safety/status feedback, default `/servo_node/status`; transitions are logged with their reason.
+- `servo_publish_rate_hz`: target-feedback update rate, configured as `50.0` Hz to match robot joint-state feedback.
+- `servo_linear_gain` and `servo_angular_gain`: pose-error feedback gains, configured as `6.0` and `5.0`.
+- `servo_max_linear_velocity_mps` and `servo_max_angular_velocity_radps`: Cartesian speed caps, configured as `0.45` m/s and `1.8` rad/s.
+- `servo_max_linear_acceleration_mps2` and `servo_max_angular_acceleration_radps2`: command slew limits, configured as `2.5` m/s² and `8.0` rad/s².
 - `gripper_input_topic`: normalized `std_msgs/Float64` command topic, configured as `/vive/gripper_opening`.
 - `gripper_command_topic`: direct controller topic, configured as `/gripper_controller/joint_trajectory`.
 - `gripper_joint_names`: controller joint order, configured as `gripper_right_finger_joint` followed by `gripper_left_finger_joint`.
@@ -227,16 +235,12 @@ Parameters live in `moveit_server/src/vive_moveit_server/config/tiago_single_par
 - `gripper_deadband_m`: suppresses repeated targets within `0.0005` m.
 - `gripper_command_duration_sec`: minimum trajectory duration, configured as `0.15` seconds.
 - `gripper_max_velocity_mps`: extends the trajectory duration when required to keep finger motion at or below `0.04` m/s.
-- `hand_target_timeout_sec`: time without a gated hand target before the deadman is considered released. It is configured as `0.12` seconds.
-- `cartesian_position_step_m` and `cartesian_orientation_step_rad`: maximum Cartesian increments used while pursuing the newest relative target.
-- `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: workspace limits applied before IK.
+- `hand_target_timeout_sec`: time without a gated hand target before Servo stops. It is configured as `0.25` seconds.
+- `position_deadband_m` and `orientation_deadband_rad`: suppress small residual pose errors before they become Servo velocity commands.
+- `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: workspace limits applied before Servo commands are generated.
 - `hand_position_scale` and `hand_position_offset`: calibration from Unity/controller coordinates into the robot frame.
-- `max_joint_delta_rad`, `joint_smoothing_alpha`, `joint_command_deadband_rad`, and `command_duration_sec`: smoothness/responsiveness tuning for the direct controller trajectory output. The joint deadband stops repeated trajectory refreshes after the arm reaches its requested pose.
-- `ik_seed_from_commanded_state`, `ik_command_resync_threshold_rad`, and `ik_solution_jump_threshold_rad`: keep repeated IK on the current joint-space branch while falling back to measured state if command tracking diverges.
-- `ik_slow_request_warn_sec`: reports IK service round trips that consume too much of the control period.
-- `ik_warmup_sec`, `ik_warmup_min_scale`, and `ik_warmup_reset_after_sec`: startup/resume ramp tuning.
 
-`NO_IK_SOLUTION` (`-31`) does not necessarily mean the `xyz` point is visually impossible. In `ik_topic` mode MoveIt is solving the full `end_effector_link` pose for the arm-only group, including orientation, joint limits, current seed state, and the fact that torso is intentionally locked out.
+MoveIt Servo parameters, including controller output, singularity thresholds, and halt behavior, live in `moveit_server/src/vive_moveit_server/config/tiago_servo.yaml`. Servo owns the primary planning scene and publishes position-only `JointTrajectory` output. Collision checking is disabled because the installed TIAGo MoveIt model reports a false proximity condition at the robot's normal arm pose; Servo joint limits, singularity handling, deadman release, and the URDF hard limits remain enforced.
 
 ### Gripper control
 
@@ -251,14 +255,14 @@ Connecting input does not intentionally move the gripper. The stream starts from
 
 The Unity client currently reports the XR controller's `joystickGrip` value, but that field is not mapped to robot gripper motion. A Unity build must send `gripperAvailable: true` and `gripperOpening` to use this command path.
 
-To disable the bundled TIAGo MoveIt launch and wait for an external MoveGroup server instead:
+To use an externally launched Servo node:
 
 ```bash
-MOVEIT_SERVER_LAUNCH_ARGS="moveit_launch_enabled:=false" \
+MOVEIT_SERVER_LAUNCH_ARGS="servo_launch_enabled:=false" \
   sudo docker compose up --build moveit_server
 ```
 
-To pass robot variant arguments through to TIAGo MoveIt, set `moveit_arm`, `moveit_arm_type`, `moveit_base_type`, `moveit_end_effector`, and/or `moveit_ft_sensor` in `MOVEIT_SERVER_LAUNCH_ARGS`. `moveit_allow_trajectory_execution` defaults to `False`; the teleop node commands the real ROS2 robot by publishing short IK-generated trajectories directly to the controller topics instead.
+Robot variant arguments such as `moveit_arm_type`, `moveit_base_type`, `moveit_end_effector`, and `moveit_ft_sensor` can still be passed in `MOVEIT_SERVER_LAUNCH_ARGS`; they configure the TIAGo description and Servo model.
 
 ## Running
 
@@ -373,7 +377,7 @@ By default the input payload includes:
 `joystickGrip` is telemetry only. The current Unity client does not populate `gripperAvailable` or `gripperOpening`, so it does not actuate the robot gripper.
 
 Hold the Vive trigger or side-grip button to command the robot wrist. On every
-press, the MoveIt server anchors that controller pose to the robot's current
+press, the Servo teleop node anchors that controller target to the robot's current
 wrist pose. Holding the controller still causes no movement; only translation
 and rotation after the press are applied. Release the button to clear the
 target and clutch state. The next press creates new anchors from the robot's
@@ -401,6 +405,16 @@ player log automatically:
 ```bash
 ./scripts/run-unity-vr-linux.sh
 ```
+
+`./scripts/start-vive-teleop.sh` also installs the repository's calibrated
+SteamVR lighthouse database before starting SteamVR. To install it manually:
+
+```bash
+./scripts/install-steamvr-lighthouse-config.sh
+```
+
+The installer validates the JSON, backs up a different existing database, and
+refuses to replace it while SteamVR is running.
 
 Builds can override the scene URL with either `VIVE_TELEOP_WEBRTC_CONFIG_URL` or a command-line argument:
 

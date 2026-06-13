@@ -4,11 +4,12 @@ from typing import Any
 
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
-from std_msgs.msg import Float64
+from std_msgs.msg import Bool, Float64
 
 
 DEFAULT_HEAD_POSE_TOPIC = "/vive/head_pose"
 DEFAULT_HAND_TARGET_TOPIC = "/vive/hand_target_pose"
+DEFAULT_HAND_DEADMAN_TOPIC = "/vive/hand_deadman"
 DEFAULT_GRIPPER_TARGET_TOPIC = "/vive/gripper_opening"
 
 
@@ -29,6 +30,11 @@ class WebRtcInputPublisher(Node):
             hand_target_topic,
             10,
         )
+        self._hand_deadman_publisher = self.create_publisher(
+            Bool,
+            DEFAULT_HAND_DEADMAN_TOPIC,
+            10,
+        )
         self._gripper_target_publisher = self.create_publisher(
             Float64,
             DEFAULT_GRIPPER_TARGET_TOPIC,
@@ -43,6 +49,7 @@ class WebRtcInputPublisher(Node):
         if data is not None:
             self._publish_head_pose(data)
             self._publish_hand_target(data)
+            self._publish_hand_deadman(data)
             self._publish_gripper_target(data)
         now_sec = self.get_clock().now().nanoseconds / 1e9
         if now_sec - self._last_input_log_sec >= self._input_log_interval_sec:
@@ -88,7 +95,7 @@ class WebRtcInputPublisher(Node):
     def _publish_hand_target(self, data: dict[str, Any]) -> None:
         if (
             not data.get("wristAvailable")
-            or data.get("wristCommandEnabled") is False
+            or data.get("wristCommandEnabled") is not True
         ):
             return
 
@@ -111,6 +118,17 @@ class WebRtcInputPublisher(Node):
             return
 
         self._hand_target_publisher.publish(message)
+
+    def _publish_hand_deadman(self, data: dict[str, Any]) -> None:
+        if "wristCommandEnabled" not in data:
+            return
+
+        message = Bool()
+        message.data = bool(
+            data.get("wristAvailable")
+            and data.get("wristCommandEnabled")
+        )
+        self._hand_deadman_publisher.publish(message)
 
     def _publish_gripper_target(self, data: dict[str, Any]) -> None:
         if not data.get("gripperAvailable"):

@@ -55,8 +55,10 @@ fi
 
 printf 'Robot camera publisher is available.\n'
 
+"$script_dir/install-steamvr-lighthouse-config.sh"
+
 if ! pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
-  printf 'Starting SteamVR through Steam...\n'
+    printf 'Starting SteamVR through Steam...\n'
   steam -applaunch 250820 >/dev/null 2>&1 &
 else
   printf 'SteamVR is already running.\n'

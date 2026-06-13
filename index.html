@@ -1133,6 +1133,7 @@
         function wristFields(state = null) {
             return {
                 wristAvailable: true,
+                wristCommandEnabled: true,
                 wristSource: 'debug_page',
                 wristFrame: controlValue('wristFrame', state) || 'unity_world',
                 wristPx: numberValue('wristPx', state),
@@ -1192,9 +1193,19 @@
         }
 
         function stopInputStream() {
+            const wasStreaming = Boolean(inputStreamTimer);
             if (inputStreamTimer) {
                 window.clearInterval(inputStreamTimer);
                 inputStreamTimer = null;
+            }
+            if (wasStreaming) {
+                sendPayloadObject({
+                    type: 'browser_wrist_release',
+                    timestamp: timestampSeconds(),
+                    hmdAvailable: false,
+                    wristAvailable: true,
+                    wristCommandEnabled: false,
+                }, { quiet: true });
             }
         }
 
