@@ -8,7 +8,7 @@ project_version="$(
     "${project_dir}/ProjectSettings/ProjectVersion.txt"
 )"
 unity_editor="${UNITY_EDITOR:-${HOME}/Unity/Hub/Editor/${project_version}/Editor/Unity}"
-output_path="${1:-${project_dir}/Builds/Linux/vive-teleop.x86_64}"
+output_path="${1:-${project_dir}/Builds/Linux/vive-teleop}"
 
 if [[ ! -x "${unity_editor}" ]]; then
   printf 'Unity editor not found: %s\n' "${unity_editor}" >&2
@@ -25,4 +25,11 @@ mkdir -p "$(dirname "${output_path}")"
   -buildLinux64Player "${output_path}" \
   -logFile -
 
+if [[ ! -x "${output_path}" ]]; then
+  printf 'Unity reported success, but the player is missing: %s\n' \
+    "${output_path}" >&2
+  exit 1
+fi
+
+touch "${output_path}.build-stamp"
 printf 'Linux player built: %s\n' "${output_path}"

@@ -1,12 +1,19 @@
 import os
+import xml.etree.ElementTree as ET
 
 import yaml
+import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
+
+
+ARM_GROUP_NAME = "arm"
+EXPECTED_ARM_JOINTS = tuple(f"arm_{index}_joint" for index in range(1, 8))
 
 
 def _load_yaml(package_name: str, relative_path: str) -> dict:
@@ -17,6 +24,49 @@ def _load_yaml(package_name: str, relative_path: str) -> dict:
         encoding="utf-8",
     ) as yaml_file:
         return yaml.safe_load(yaml_file)
+
+
+def _validate_arm_group(srdf_path: str, mappings: dict[str, str]) -> None:
+    srdf_xml = xacro.process_file(srdf_path, mappings=mappings).toxml()
+    root = ET.fromstring(srdf_xml)
+    arm_group = next(
+        (
+            group
+            for group in root.findall("group")
+            if group.get("name") == ARM_GROUP_NAME
+        ),
+        None,
+    )
+    if arm_group is None:
+        raise RuntimeError(
+            f"MoveIt SRDF does not define the '{ARM_GROUP_NAME}' group"
+        )
+
+    group_joints = {
+        joint.get("name")
+        for joint in arm_group.findall("joint")
+        if joint.get("name")
+    }
+    missing_joints = [
+        joint_name
+        for joint_name in EXPECTED_ARM_JOINTS
+        if joint_name not in group_joints
+    ]
+    if missing_joints:
+        raise RuntimeError(
+            f"MoveIt group '{ARM_GROUP_NAME}' is not the full 7-DOF arm; "
+            f"missing joints: {', '.join(missing_joints)}"
+        )
+    if "torso_lift_joint" in group_joints:
+        raise RuntimeError(
+            f"MoveIt group '{ARM_GROUP_NAME}' unexpectedly includes "
+            "'torso_lift_joint'"
+        )
+
+    get_logger("servo_runtime").info(
+        "Validated MoveIt Servo group 'arm' with arm_1_joint through "
+        "arm_7_joint"
+    )
 
 
 def _start_servo_runtime(context, *args, **kwargs):
@@ -33,6 +83,7 @@ def _start_servo_runtime(context, *args, **kwargs):
         "ft_sensor": LaunchConfiguration("ft_sensor").perform(context),
         "base_type": LaunchConfiguration("base_type").perform(context),
     }
+    _validate_arm_group(srdf_path, srdf_mappings)
     moveit_config = (
         MoveItConfigsBuilder("tiago")
         .robot_description_semantic(

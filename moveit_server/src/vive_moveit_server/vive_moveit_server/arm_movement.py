@@ -14,6 +14,7 @@ except ImportError:
 
 
 SERVO_POSE_TOPIC = "/servo_node/pose_target_cmds"
+SERVO_POSE_ACTIVE_TOPIC = "/servo_node/pose_target_active"
 SERVO_SWITCH_COMMAND_TYPE_SERVICE = "/servo_node/switch_command_type"
 
 
@@ -107,17 +108,22 @@ class ArmMovementMixin:
 
     def _on_hand_target_active(self, message: Bool) -> None:
         if message.data:
+            self._publish_servo_pose_active(True)
             return
         if (
             self.hand_target_active
             or self.pending_hand_target is not None
             or self.deadman_controller_anchor is not None
             or self.deadman_robot_anchor is not None
+            or getattr(self, "_servo_pose_commands_active", False)
         ):
             self._reset_hand_target_pursuit()
+        else:
+            self._publish_servo_pose_active(False)
 
     def _on_hand_target(self, message: PoseStamped) -> None:
         if not self.hand_target_active:
+            self._publish_servo_pose_active(True)
             controller_anchor = self._scale_hand_target(message)
             if not _normalize_quaternion(controller_anchor.pose.orientation):
                 self._warn_throttled(
@@ -153,8 +159,9 @@ class ArmMovementMixin:
         self.deadman_robot_anchor = None
         self.last_hand_target_received_sec = 0.0
         self.hand_target_active = False
+        self._publish_servo_pose_active(False)
         self.get_logger().info(
-            "Deadman inactive; cleared hand-target pursuit state"
+            "Deadman inactive; cleared hand-target pursuit and Servo queue"
         )
 
     def _maybe_send_latest_target(self) -> None:
@@ -256,6 +263,12 @@ class ArmMovementMixin:
             SERVO_POSE_TOPIC,
             qos_profile_system_default,
         )
+        self._servo_pose_active_publisher = self.create_publisher(
+            Bool,
+            SERVO_POSE_ACTIVE_TOPIC,
+            qos_profile_system_default,
+        )
+        self._servo_pose_commands_active = False
         self._servo_switch_command_type_client = None
         if ServoCommandType is not None:
             self._servo_switch_command_type_client = self.create_client(
@@ -269,6 +282,15 @@ class ArmMovementMixin:
         )
         self._servo_twist_selected = False
         self._servo_switch_in_flight = False
+
+    def _publish_servo_pose_active(self, active: bool) -> None:
+        if not hasattr(self, "_servo_pose_active_publisher"):
+            self._ensure_servo_interfaces()
+
+        # Repeat both states so a newly discovered subscriber converges to the
+        # current deadman state without relying on the first sample.
+        self._servo_pose_active_publisher.publish(Bool(data=active))
+        self._servo_pose_commands_active = active
 
     def _servo_twist_mode_ready(self) -> bool:
         self._ensure_servo_interfaces()

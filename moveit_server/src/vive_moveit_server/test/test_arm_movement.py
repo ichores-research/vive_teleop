@@ -7,6 +7,14 @@ from std_msgs.msg import Bool
 from vive_moveit_server.arm_movement import ArmMovementMixin
 
 
+class _Publisher:
+    def __init__(self) -> None:
+        self.messages = []
+
+    def publish(self, message) -> None:
+        self.messages.append(message)
+
+
 def _pose(
     x: float,
     y: float,
@@ -77,6 +85,8 @@ def test_deadman_release_clears_clutch_immediately() -> None:
     movement.deadman_controller_anchor = _pose(1.0, 2.0, 3.0)
     movement.deadman_robot_anchor = _pose(0.5, 0.0, 0.8)
     movement.last_hand_target_received_sec = 1.0
+    movement._servo_pose_commands_active = True
+    movement._servo_pose_active_publisher = _Publisher()
     movement.get_logger = lambda: type(
         "Logger",
         (),
@@ -89,3 +99,6 @@ def test_deadman_release_clears_clutch_immediately() -> None:
     assert movement.pending_hand_target is None
     assert movement.deadman_controller_anchor is None
     assert movement.deadman_robot_anchor is None
+    assert movement._servo_pose_commands_active is False
+    assert len(movement._servo_pose_active_publisher.messages) == 1
+    assert movement._servo_pose_active_publisher.messages[0].data is False

@@ -7,6 +7,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_system_default
 from rclpy.task import Future
 from rclpy.time import Time
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -134,6 +135,10 @@ class ServoPoseBridge(Node):
             "twist_command_topic",
             "/servo_node/delta_twist_cmds",
         ).value
+        self.pose_active_topic = self.declare_parameter(
+            "pose_active_topic",
+            "/servo_node/pose_target_active",
+        ).value
         self.start_servo_service = self.declare_parameter(
             "start_servo_service",
             "/servo_node/start_servo",
@@ -152,6 +157,9 @@ class ServoPoseBridge(Node):
         )
         self.target_timeout_sec = float(
             self.declare_parameter("target_timeout_sec", 0.12).value
+        )
+        self.halt_command_count = int(
+            self.declare_parameter("halt_command_count", 4).value
         )
         self.linear_gain = float(
             self.declare_parameter("linear_gain", 1.5).value
@@ -205,6 +213,7 @@ class ServoPoseBridge(Node):
         self.previous_target_received_sec = 0.0
         self.target_linear_velocity = (0.0, 0.0, 0.0)
         self.target_angular_velocity = (0.0, 0.0, 0.0)
+        self.pose_commands_active = False
         self.servo_started = False
         self.start_request_in_flight = False
         self.last_start_attempt_sec = 0.0
@@ -223,6 +232,12 @@ class ServoPoseBridge(Node):
             self._on_pose_command,
             qos_profile_system_default,
         )
+        self.pose_active_subscription = self.create_subscription(
+            Bool,
+            self.pose_active_topic,
+            self._on_pose_active,
+            qos_profile_system_default,
+        )
         self.start_client = self.create_client(
             Trigger,
             self.start_servo_service,
@@ -235,7 +250,33 @@ class ServoPoseBridge(Node):
             f"to twists on '{self.twist_command_topic}'"
         )
 
+    def _on_pose_active(self, message: Bool) -> None:
+        if message.data:
+            if not self.pose_commands_active:
+                self._clear_target_state()
+            self.pose_commands_active = True
+            return
+
+        had_pursuit_state = (
+            self.pose_commands_active
+            or self.latest_target is not None
+            or self.previous_target is not None
+            or self.target_linear_velocity != (0.0, 0.0, 0.0)
+            or self.target_angular_velocity != (0.0, 0.0, 0.0)
+        )
+        self.pose_commands_active = False
+        if not had_pursuit_state:
+            return
+
+        self._clear_target_state()
+        self._publish_halt_commands()
+        self.get_logger().info(
+            "Pose pursuit inactive; cleared target state and halted Servo"
+        )
+
     def _on_pose_command(self, message: PoseStamped) -> None:
+        if not self.pose_commands_active:
+            return
         if message.header.frame_id != self.planning_frame:
             self._warn_throttled(
                 "pose_frame",
@@ -269,10 +310,8 @@ class ServoPoseBridge(Node):
             and self._now_sec() - self.latest_target_received_sec
             > self.target_timeout_sec
         ):
-            self.latest_target = None
-            self.previous_target = None
-            self.target_linear_velocity = (0.0, 0.0, 0.0)
-            self.target_angular_velocity = (0.0, 0.0, 0.0)
+            self._clear_target_state()
+            self._publish_halt_commands()
             return
 
         try:
@@ -362,6 +401,22 @@ class ServoPoseBridge(Node):
         command.twist.angular.y = angular_command[1]
         command.twist.angular.z = angular_command[2]
         self.twist_publisher.publish(command)
+
+    def _clear_target_state(self) -> None:
+        self.latest_target = None
+        self.latest_target_received_sec = 0.0
+        self.previous_target = None
+        self.previous_target_received_sec = 0.0
+        self.target_linear_velocity = (0.0, 0.0, 0.0)
+        self.target_angular_velocity = (0.0, 0.0, 0.0)
+
+    def _publish_halt_commands(self) -> None:
+        command_count = max(1, self.halt_command_count)
+        for _ in range(command_count):
+            command = TwistStamped()
+            command.header.stamp = self.get_clock().now().to_msg()
+            command.header.frame_id = self.planning_frame
+            self.twist_publisher.publish(command)
 
     def _update_target_velocity(
         self,

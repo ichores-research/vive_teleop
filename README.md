@@ -16,11 +16,14 @@ cd /home/mateusz/vive_teleop
 The script:
 
 1. Detects the Wi-Fi and robot-facing Ethernet addresses.
-2. Builds and starts `ros2_app_wifi`, `moveit_server_wifi`, and `coturn_wifi`.
-3. Waits for `http://<wifi-ip>:8088/config`.
-4. Starts SteamVR through Steam if it is not already running.
-5. Warns if the robot at `10.68.0.1` is unreachable.
-6. Runs the Unity player in the foreground with controller recording enabled.
+2. Rebuilds the Unity Linux player when its sources or project settings changed.
+3. Builds and starts `ros2_app_wifi`, `moveit_server_wifi`, and `coturn_wifi`.
+4. Waits for `http://<wifi-ip>:8088/config`.
+5. Waits for the robot camera, wrist TF, joint states, and gripper state.
+6. Verifies uncapped pose-bridge velocity, the deadman halt gate, automatic
+   Servo joint-limit scaling, and the complete seven-joint `arm` MoveIt group.
+7. Starts SteamVR through Steam if it is not already running.
+8. Runs the Unity player in the foreground with controller recording enabled.
 
 Use `Ctrl+C` in that terminal to stop the Unity player. Stop the containers with:
 
@@ -39,11 +42,20 @@ If the Unity player has not been built yet:
 ./scripts/start-vive-teleop.sh
 ```
 
+Running `start-vive-teleop.sh` is sufficient after source changes; manual Unity
+or Docker compilation is not required. It uses Docker Compose `--build` and a
+Unity build stamp to rebuild only stale artifacts. Set
+`VIVE_TELEOP_FORCE_UNITY_BUILD=1` to force a Unity rebuild or
+`VIVE_TELEOP_SKIP_UNITY_BUILD=1` to bypass the automatic Unity build.
+
 The Unity build is expected at:
 
 ```text
-unity-vr-headset/Builds/Linux/vive-teleop.x86_64
+unity-vr-headset/Builds/Linux/vive-teleop
 ```
+
+`run-unity-vr-linux.sh` still accepts an older `vive-teleop.x86_64` build as a
+fallback. Set `VIVE_TELEOP_PLAYER` to run a player from another path.
 
 ### Start each part manually
 
@@ -76,11 +88,11 @@ docker ps --format '{{.Names}}\t{{.Status}}' |
 WEBRTC_HOST_IP="$(./scripts/detect-webrtc-host-ip.sh)"
 curl -s "http://${WEBRTC_HOST_IP}:8088/config" | python3 -m json.tool
 
-docker exec moveit_server_wifi bash -lc \
-  'source /opt/ros/humble/setup.bash && ros2 topic info /joint_states -v'
+./scripts/check-teleop-runtime.sh
 ```
 
-Arm control remains disabled until `/joint_states` has a robot publisher.
+Arm control remains disabled until the runtime check can read fresh robot state
+and validate the seven-joint Servo configuration.
 
 ## Architecture
 
@@ -187,7 +199,7 @@ The teleop node is split by responsibility:
 - `vive_moveit_server/vive_moveit_server.py`: node initialization, parameters, ROS clients/publishers, timers, and head/gripper control.
 - `vive_moveit_server/teleop_data.py`: ROS subscriptions for head, hand, gripper, and joint-state input.
 - `vive_moveit_server/arm_movement.py`: deadman clutching, TF wrist anchoring, workspace limits, and Servo pose publication.
-- `vive_moveit_server/servo_pose_bridge.py`: converts absolute 6-DoF wrist targets into velocity-limited `TwistStamped` commands for the ROS 2 Humble Servo API.
+- `vive_moveit_server/servo_pose_bridge.py`: converts absolute 6-DoF Cartesian wrist targets into `TwistStamped` commands for the ROS 2 Humble Servo API. Servo resolves that task through all seven TIAGo arm joints.
 - `launch/servo_runtime.launch.py`: starts MoveIt Servo and the pose bridge using the TIAGo semantic model, kinematics metadata, and joint limits.
 
 Default behavior:
@@ -196,15 +208,16 @@ Default behavior:
 - Publishes head commands at a fixed 20 Hz, with overlapping `0.1` second trajectory points so the TIAGo `joint_trajectory_controller` can interpolate smoothly.
 - Applies a `0.002` rad head deadband and clamps pan/tilt to 90% of configured joint limits before publishing, so small HMD jitter and startup extremes do not continuously drive the motors.
 - Subscribes to `/vive/hand_target_pose` for 6-DoF joystick/controller wrist targets.
-- Uses MoveIt Servo group `arm` by default so `torso_lift_joint` is not used.
+- Uses MoveIt Servo group `arm`, validates that it contains `arm_1_joint` through `arm_7_joint`, and excludes `torso_lift_joint`.
 - Treats the trigger/side-grip input as a deadman clutch. Each press records the current headset position and yaw, controller pose, and robot wrist pose from TF, so pressing the button while the controller is elsewhere does not move the arm.
 - Measures controller motion in the headset frame recorded at the deadman press. Later headset translation, pitch, roll, or yaw does not steer the arm, so the operator can keep looking around while commanding the wrist.
 - Applies only controller translation and rotation accumulated after the current deadman press. Releasing the button clears the target and clutch anchors.
-- Clears clutch state immediately from `/vive/hand_target_active`; `hand_target_timeout_sec` remains the fallback for a lost WebRTC stream.
+- Relays deadman state to `/servo_node/pose_target_active`. Release disables pose acceptance, clears the bridge target and feed-forward state, and publishes four zero twists so Servo replaces queued motion before the next task. `hand_target_timeout_sec` applies the same halt as a fallback for a lost WebRTC stream.
 - Keeps only the newest hand target. New samples replace the previous target instead of being replayed as a movement queue.
-- Publishes absolute wrist targets on `/servo_node/pose_target_cmds`. On Humble, `servo_pose_bridge` converts pose error into bounded Cartesian velocity commands on `/servo_node/delta_twist_cmds`.
+- Publishes absolute wrist targets on `/servo_node/pose_target_cmds`. On Humble, `servo_pose_bridge` converts pose error into Cartesian velocity commands on `/servo_node/delta_twist_cmds`.
 - Starts Servo through `/servo_node/start_servo`; Servo consumes live `/joint_states` and publishes `trajectory_msgs/JointTrajectory` commands to `/arm_controller/joint_trajectory`.
-- Uses Servo collision checking, singularity scaling, joint-limit margins, smoothing, and stale-command halting instead of calling `/compute_ik`.
+- Disables the bridge-level linear and angular velocity caps for maximum tracking speed. Servo still applies the loaded per-joint velocity limits, singularity scaling, joint-limit margins, smoothing, and stale-command halting.
+- Runs with Servo collision checking disabled by default to avoid proximity scaling. This is faster but can command self-colliding or scene-colliding motion; enable `check_collisions` before operation where collision avoidance is required.
 - Subscribes to normalized commands on `/vive/gripper_opening` and publishes synchronized, velocity-aware finger trajectories to `/gripper_controller/joint_trajectory`.
 - Suppresses the initial gripper command when the requested opening matches the measured robot state, then suppresses duplicate targets within the configured deadband.
 
@@ -229,17 +242,22 @@ Teleop parameters live in `moveit_server/src/vive_moveit_server/config/tiago_sin
 - `gripper_max_velocity_mps`: extends the trajectory duration when required to keep finger motion at or below `0.04` m/s.
 - `hand_target_timeout_sec`: time without a gated hand target before the deadman is considered released. It is configured as `0.12` seconds.
 - `hand_target_active_topic`: explicit deadman state topic, configured as `/vive/hand_target_active`.
+- `pose_active_topic` and `halt_command_count` in `servo_pose_bridge.yaml`: gate pose acceptance and control how many immediate zero twists are sent when deadman pursuit stops.
 - `max_hand_target_distance_m`, `min_hand_target_z_m`, `max_hand_target_z_m`: workspace limits applied before Servo.
 - `hand_position_scale`: per-axis calibration of controller displacement. A constant position offset is intentionally not exposed because clutch-relative subtraction would cancel it.
 - `move_group_name`, `planning_frame`, `ee_frame_name`, `robot_link_command_frame`, and `command_out_topic` in `tiago_servo.yaml`: define Servo's robot group, frames, and arm controller output.
-- `publish_period`, `incoming_command_timeout`, singularity thresholds, collision thresholds, and `joint_limit_margin` in `tiago_servo.yaml`: control Servo timing and safety behavior.
+- `publish_period`, `incoming_command_timeout`, singularity thresholds, collision settings, and `joint_limit_margin` in `tiago_servo.yaml`: control Servo timing and safety behavior. `check_collisions` is currently `false`.
+- `command_in_type` is `speed_units`, so the Cartesian pose bridge sends physical linear and angular velocities. The `scale.linear`, `scale.rotational`, and `scale.joint` values only affect unitless commands and do not increase this pose-control path.
+- `override_velocity_scaling_factor` is `0.0`, which leaves Servo's automatic per-joint velocity scaling active instead of forcing a fixed override.
 - `hand_position_scale` defaults to `[1.0, 1.0, 1.0]`, so controller translation after clutching maps one-to-one to robot wrist translation.
-- `linear_gain`, `angular_gain`, velocity limits, and pose deadbands in `servo_pose_bridge.yaml`: tune how aggressively the Humble pose bridge corrects residual wrist pose error.
-- `linear_feedforward_gain`, `angular_feedforward_gain`, `feedforward_filter_alpha`, stop thresholds, and feed-forward timeouts in `servo_pose_bridge.yaml`: use consecutive target poses to reduce steady tracking lag. Feed-forward stops immediately with a stationary target, expires before the deadman timeout, and all commands are limited by total linear/angular vector magnitude.
+- `linear_gain`, `angular_gain`, velocity limits, and pose deadbands in `servo_pose_bridge.yaml`: tune how aggressively the Humble pose bridge corrects residual wrist pose error. A velocity limit of `0.0` disables that bridge-level cap; Servo still enforces the loaded robot joint velocity limits.
+- `linear_feedforward_gain`, `angular_feedforward_gain`, `feedforward_filter_alpha`, stop thresholds, and feed-forward timeouts in `servo_pose_bridge.yaml`: use consecutive target poses to reduce steady tracking lag. Feed-forward stops with a stationary target and expires before the deadman timeout. Positive bridge velocity limits cap total linear/angular vector magnitude; the current `0.0` values disable those caps.
 
 Useful Servo health checks:
 
 ```bash
+./scripts/check-teleop-runtime.sh
+
 docker exec moveit_server_wifi bash -lc \
   'source /opt/ros/humble/setup.bash &&
    ros2 service list | grep /servo_node/start_servo &&
@@ -258,7 +276,15 @@ The browser debug client is the built-in gripper frontend:
 
 Connecting input does not intentionally move the gripper. The stream starts from the measured opening, and the server ignores an initial target that is already within `gripper_deadband_m` of the current finger position.
 
-The Unity client currently reports the XR controller's `joystickGrip` value, but that field is not mapped to robot gripper motion. A Unity build must send `gripperAvailable: true` and `gripperOpening` to use this command path.
+The Unity client initializes its gripper target from `/robot_state` and sends
+`gripperAvailable: true` with a normalized `gripperOpening`. Swipe the right
+Vive trackpad or joystick upward to open the gripper and downward to close it.
+The wrist deadman is not required for gripper motion. Each swipe starts from
+the current latched opening, and the vertical displacement commands an opening
+relative to that anchor. Returning to center latches the result for the next
+swipe. `gripperJoystickDeadzone` suppresses center jitter, while
+`gripperJoystickTravelForFullRange` sets the displacement needed to reach fully
+open or closed.
 
 To disable the bundled TIAGo MoveGroup launch while leaving the Servo runtime enabled:
 
@@ -286,6 +312,14 @@ For Docker services only:
 This starts the host-network `ros2_app_wifi`, `moveit_server_wifi`, and
 `coturn_wifi` services. The MoveIt container needs live robot `/joint_states`
 and the TIAGo robot description before Servo can command the physical arm.
+Validate those services and the live robot state with:
+
+```bash
+./scripts/check-teleop-runtime.sh
+```
+
+The check waits up to 60 seconds by default. Set
+`TELEOP_RUNTIME_WAIT_SECONDS` to change that startup timeout.
 
 In another terminal, serve the debug client:
 
@@ -379,7 +413,11 @@ By default the input payload includes:
 - A robot wrist target anchored to the live `/robot_state` wrist pose.
 - Trackpad, trigger, grip, and menu-button values.
 
-`joystickGrip` is telemetry only. The current Unity client does not populate `gripperAvailable` or `gripperOpening`, so it does not actuate the robot gripper.
+`joystickGrip` remains telemetry and part of the wrist deadman. Swiping the
+right trackpad or joystick vertically controls the gripper independently and
+populates `gripperAvailable` and `gripperOpening`; it does not require the wrist
+deadman. Each swipe is relative to the opening latched when the gesture starts.
+Up opens and down closes.
 
 Hold the Vive trigger or side-grip button to command the robot wrist. On every
 press, Unity records the current headset position and yaw and the current
@@ -397,6 +435,15 @@ wrist states are available. If the joystick is represented by a custom tracked
 GameObject, assign it to `Vive Teleop Web RTC Client > Wrist Pose Source`;
 otherwise the right-hand XR node is used.
 
+After manually repositioning the robot, release the wrist deadman and press `P`.
+Unity immediately releases wrist pursuit, reloads the measured wrist and
+gripper from `/robot_state`, and adopts them as the new command targets. The
+next valid headset/controller sample becomes the new workspace anchor, so
+tracking can restart without driving back toward the old target. If the robot
+state request fails, wrist and joystick gripper commands remain disabled rather
+than using stale state. `R` remains the lightweight re-anchor that keeps the
+last commanded robot target; `P` is the full measured-state resynchronization.
+
 Press `Space` or the Vive controller menu button to start or stop local 6-DoF recording. Each line in the output `.jsonl` file is the same `unity_teleop_pose` JSON object sent over WebRTC, including wrist XYZ, quaternion, calibrated robot quaternion, workspace mode, captured headset anchor pose, position scale, and controller values. On Linux, recordings default to:
 
 ```text
@@ -408,7 +455,7 @@ Recording can also be controlled at startup:
 ```bash
 VIVE_TELEOP_RECORD_CONTROLLER=1 \
 VIVE_TELEOP_RECORDING_DIR="$PWD/recordings" \
-./unity-vr-headset/Builds/Linux/vive-teleop.x86_64
+./unity-vr-headset/Builds/Linux/vive-teleop
 ```
 
 The recommended terminal launcher sets these variables and writes a timestamped
@@ -436,12 +483,19 @@ If the robot image is visible but the arm cannot move, first verify that the
 robot is online and publishing joint state:
 
 ```bash
+./scripts/check-teleop-runtime.sh
+
 ping -c 3 10.68.0.1
 
 docker exec moveit_server_wifi bash -lc \
   'source /opt/ros/humble/setup.bash && \
    ros2 topic info /joint_states -v'
 ```
+
+The runtime check also verifies that the pose-bridge velocity caps are disabled,
+the deadman queue-clear gate is connected, Servo uses automatic joint-limit
+scaling, the MoveIt `arm` group contains `arm_1_joint` through `arm_7_joint`,
+the torso is excluded, and wrist/gripper state is fresh.
 
 `Publisher count: 0` means the robot is not currently discoverable. The
 deadman clutch intentionally waits instead of commanding the arm without a
