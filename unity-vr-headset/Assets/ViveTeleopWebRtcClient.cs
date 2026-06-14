@@ -44,10 +44,19 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     public bool calibrateWristOnFirstSample = true;
     public Vector3 wristRotationOffsetEuler = Vector3.zero;
     public KeyCode recalibrateWristKey = KeyCode.R;
+    public KeyCode resyncRobotTrackingKey = KeyCode.P;
     public float wristPositionScale = 1f;
+    public bool useHeadsetRelativeWristWorkspace = true;
     public bool requireWristDeadman = true;
     [Range(0f, 1f)]
     public float wristDeadmanTriggerThreshold = 0.15f;
+
+    [Header("Gripper")]
+    public bool controlGripperWithJoystick = true;
+    [Range(0f, 0.95f)]
+    public float gripperJoystickDeadzone = 0.15f;
+    [Range(0.1f, 2f)]
+    public float gripperJoystickTravelForFullRange = 0.75f;
 
     [Header("6-DoF Recording")]
     public bool recordControllerPoseOnStart;
@@ -61,11 +70,14 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     RTCDataChannel inputChannel;
     Coroutine webRtcUpdateRoutine;
     Coroutine poseSampleRoutine;
+    Coroutine robotStateRefreshRoutine;
     bool inputChannelOpen;
     bool wristCalibrationReady;
     bool calibrateWristOnNextSample;
     bool robotWristStateReady;
+    bool robotGripperStateReady;
     bool wristCommandActive;
+    bool headsetWorkspaceWarningLogged;
     bool recenterHeadsetPoseOnNextSample;
     bool previousRecordingMenuButton;
     bool recordingActive;
@@ -76,22 +88,31 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     string recordingPath;
     StreamWriter recordingWriter;
     ulong openVrDefaultActionSetHandle = OpenVR.k_ulInvalidActionSetHandle;
+    ulong openVrTrackpadActionSetHandle = OpenVR.k_ulInvalidActionSetHandle;
     ulong openVrInputSourceHandle = OpenVR.k_ulInvalidInputValueHandle;
     ulong openVrTriggerActionHandle = OpenVR.k_ulInvalidActionHandle;
     ulong openVrTriggerClickActionHandle = OpenVR.k_ulInvalidActionHandle;
     ulong openVrGripActionHandle = OpenVR.k_ulInvalidActionHandle;
+    ulong openVrTrackpadActionHandle = OpenVR.k_ulInvalidActionHandle;
     readonly VRActiveActionSet_t[] openVrActiveActionSets =
-        new VRActiveActionSet_t[1];
+        new VRActiveActionSet_t[2];
     readonly Dictionary<uint, string> openVrDeviceNames =
         new Dictionary<uint, string>();
     readonly List<InputDevice> xrWristDevices = new List<InputDevice>();
     Vector3 controllerWristAnchorPosition;
     Quaternion controllerWristAnchorRotation = Quaternion.identity;
+    Vector3 headsetWorkspaceAnchorPosition;
+    Quaternion headsetWorkspaceYaw = Quaternion.identity;
     Vector3 robotWristAnchorPosition;
     Quaternion robotWristAnchorRotation = Quaternion.identity;
     Vector3 lastRobotWristTargetPosition;
     Quaternion lastRobotWristTargetRotation = Quaternion.identity;
     string robotWristFrame = "base_footprint";
+    float gripperOpening;
+    float gripperGestureAnchorOpening;
+    float gripperGestureStartAxis;
+    bool gripperGestureActive;
+    ServerConfig activeServerConfig;
 
     public bool IsRecording => recordingActive;
     public string RecordingPath => recordingPath;
@@ -151,6 +172,11 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             RecenterHeadsetPose();
         }
 
+        if (Input.GetKeyDown(resyncRobotTrackingKey))
+        {
+            ResyncTrackingToRobotState();
+        }
+
         if (Input.GetKeyDown(toggleRecordingKey))
         {
             ToggleRecording();
@@ -190,6 +216,68 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         recenterHeadsetPoseOnNextSample = true;
     }
 
+    public void ResyncTrackingToRobotState()
+    {
+        if (robotStateRefreshRoutine != null)
+        {
+            Debug.LogWarning(
+                "ViveTeleop WebRTC: robot-state tracking refresh is already running.");
+            return;
+        }
+
+        robotStateRefreshRoutine =
+            StartCoroutine(ResyncTrackingToRobotStateRoutine());
+    }
+
+    IEnumerator ResyncTrackingToRobotStateRoutine()
+    {
+        Debug.Log(
+            "ViveTeleop WebRTC: releasing wrist control and loading the " +
+            "robot's current wrist and gripper state.");
+
+        robotWristStateReady = false;
+        robotGripperStateReady = false;
+        wristCalibrationReady = false;
+        wristCommandActive = false;
+        calibrateWristOnNextSample = true;
+        recenterHeadsetPoseOnNextSample = true;
+
+        // Publish the clutch release before waiting for the HTTP snapshot.
+        SendPose();
+
+        var serverConfig = activeServerConfig;
+        if (serverConfig == null)
+        {
+            yield return LoadServerConfig(config => serverConfig = config);
+        }
+
+        if (serverConfig == null)
+        {
+            Debug.LogError(
+                "ViveTeleop WebRTC: tracking refresh failed because no " +
+                "server config is available. Wrist tracking remains disabled.");
+            robotStateRefreshRoutine = null;
+            yield break;
+        }
+
+        yield return LoadRobotWristState(serverConfig);
+        if (!robotWristStateReady)
+        {
+            Debug.LogError(
+                "ViveTeleop WebRTC: tracking refresh failed. Wrist tracking " +
+                "remains disabled until a valid robot state is loaded.");
+            robotStateRefreshRoutine = null;
+            yield break;
+        }
+
+        activeServerConfig = serverConfig;
+        calibrateWristOnNextSample = true;
+        Debug.Log(
+            "ViveTeleop WebRTC: robot position adopted. Tracking will restart " +
+            "from the current headset and controller pose.");
+        robotStateRefreshRoutine = null;
+    }
+
     IEnumerator ConnectRoutine()
     {
         Disconnect();
@@ -202,6 +290,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             Debug.LogError("ViveTeleop WebRTC: no server config available.");
             yield break;
         }
+        activeServerConfig = serverConfig;
 
         if (connectVideo)
         {
@@ -258,6 +347,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     IEnumerator LoadRobotWristState(ServerConfig serverConfig)
     {
         robotWristStateReady = false;
+        robotGripperStateReady = false;
         wristCalibrationReady = false;
         wristCommandActive = false;
 
@@ -309,6 +399,21 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         lastRobotWristTargetPosition = position;
         lastRobotWristTargetRotation = rotation;
         robotWristStateReady = true;
+
+        if (snapshot.gripper != null &&
+            float.IsFinite(snapshot.gripper.opening))
+        {
+            gripperOpening = Mathf.Clamp01(snapshot.gripper.opening);
+            gripperGestureAnchorOpening = gripperOpening;
+            gripperGestureActive = false;
+            robotGripperStateReady = true;
+        }
+        else
+        {
+            Debug.LogWarning(
+                "ViveTeleop WebRTC: robot gripper state is unavailable; " +
+                "joystick gripper control is disabled.");
+        }
 
         Debug.Log(
             $"ViveTeleop WebRTC: loaded robot wrist anchor " +
@@ -522,35 +627,27 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             headsetRecenter = recenterHeadsetPoseOnNextSample,
         };
 
-        if (sendHmdPose && hmdPoseStreamingEnabled)
+        var headsetPoseAvailable = TryGetHeadsetPose(
+            out var headsetPosition,
+            out var headsetRotation);
+        if (sendHmdPose && hmdPoseStreamingEnabled && headsetPoseAvailable)
         {
-            var hmdSource = poseSource;
-            if (hmdSource == null && Camera.main != null)
-            {
-                hmdSource = Camera.main.transform;
-            }
-
-            if (hmdSource != null)
-            {
-                var hmdPosition = hmdSource.position;
-                var hmdRotation = hmdSource.rotation;
-                payload.hmdAvailable = true;
-                payload.hmdFrame = "unity_world";
-                payload.hmdPx = hmdPosition.x;
-                payload.hmdPy = hmdPosition.y;
-                payload.hmdPz = hmdPosition.z;
-                payload.hmdRx = hmdRotation.x;
-                payload.hmdRy = hmdRotation.y;
-                payload.hmdRz = hmdRotation.z;
-                payload.hmdRw = hmdRotation.w;
-            }
+            payload.hmdAvailable = true;
+            payload.hmdFrame = "unity_world";
+            payload.hmdPx = headsetPosition.x;
+            payload.hmdPy = headsetPosition.y;
+            payload.hmdPz = headsetPosition.z;
+            payload.hmdRx = headsetRotation.x;
+            payload.hmdRy = headsetRotation.y;
+            payload.hmdRz = headsetRotation.z;
+            payload.hmdRw = headsetRotation.w;
         }
 
         if (sendJoystickWristPose &&
             TryGetWristPose(out var wristPose, out var joystickState))
         {
             var correctedRotation =
-                wristPose.rotation * Quaternion.Euler(wristRotationOffsetEuler);
+                Quaternion.Euler(wristRotationOffsetEuler) * wristPose.rotation;
             var deadmanPressed =
                 !requireWristDeadman ||
                 joystickState.trigger >= wristDeadmanTriggerThreshold ||
@@ -564,27 +661,40 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
             if (shouldCalibrate && robotWristStateReady)
             {
-                controllerWristAnchorPosition = wristPose.position;
-                controllerWristAnchorRotation = correctedRotation;
-                robotWristAnchorPosition = lastRobotWristTargetPosition;
-                robotWristAnchorRotation = lastRobotWristTargetRotation;
-                wristCalibrationReady = true;
-                calibrateWristOnNextSample = false;
-                Debug.Log(
-                    "ViveTeleop WebRTC: anchored controller to the current " +
-                    "robot wrist target.");
+                wristCalibrationReady = TryCaptureWristWorkspaceAnchor(
+                    wristPose,
+                    correctedRotation,
+                    headsetPoseAvailable,
+                    headsetPosition,
+                    headsetRotation);
+                if (wristCalibrationReady)
+                {
+                    robotWristAnchorPosition = lastRobotWristTargetPosition;
+                    robotWristAnchorRotation = lastRobotWristTargetRotation;
+                    calibrateWristOnNextSample = false;
+                    Debug.Log(
+                        "ViveTeleop WebRTC: anchored the headset/controller " +
+                        "workspace to the current robot wrist target.");
+                }
             }
 
             wristCommandActive = deadmanPressed;
 
-            if (robotWristStateReady && wristCalibrationReady && deadmanPressed)
+            if (robotWristStateReady &&
+                wristCalibrationReady &&
+                deadmanPressed &&
+                TryGetWristWorkspacePose(
+                    wristPose,
+                    correctedRotation,
+                    out var workspacePosition,
+                    out var workspaceRotation))
             {
                 var unityDelta =
-                    wristPose.position - controllerWristAnchorPosition;
+                    workspacePosition - controllerWristAnchorPosition;
                 var robotDelta =
                     UnityDeltaToRobot(unityDelta) * wristPositionScale;
                 var unityRotationDelta =
-                    correctedRotation *
+                    workspaceRotation *
                     Quaternion.Inverse(controllerWristAnchorRotation);
                 var robotRotationDelta =
                     UnityRotationDeltaToRobot(unityRotationDelta);
@@ -602,6 +712,20 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
                 wristCalibrationReady &&
                 deadmanPressed;
             payload.wristSource = wristPose.source;
+            payload.wristWorkspace =
+                useHeadsetRelativeWristWorkspace
+                    ? "headset_relative_fixed_yaw"
+                    : "unity_world";
+            payload.wristPositionScale = wristPositionScale;
+            payload.wristWorkspaceAnchorAvailable =
+                wristCalibrationReady && useHeadsetRelativeWristWorkspace;
+            payload.wristWorkspaceAnchorPx = headsetWorkspaceAnchorPosition.x;
+            payload.wristWorkspaceAnchorPy = headsetWorkspaceAnchorPosition.y;
+            payload.wristWorkspaceAnchorPz = headsetWorkspaceAnchorPosition.z;
+            payload.wristWorkspaceAnchorRx = headsetWorkspaceYaw.x;
+            payload.wristWorkspaceAnchorRy = headsetWorkspaceYaw.y;
+            payload.wristWorkspaceAnchorRz = headsetWorkspaceYaw.z;
+            payload.wristWorkspaceAnchorRw = headsetWorkspaceYaw.w;
             payload.wristFrame = "unity_world";
             payload.wristPx = wristPose.position.x;
             payload.wristPy = wristPose.position.y;
@@ -623,6 +747,10 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             payload.joystickTrigger = joystickState.trigger;
             payload.joystickGrip = joystickState.grip;
             payload.joystickPrimaryButton = joystickState.primaryButton;
+            UpdateGripperCommand(joystickState);
+            payload.gripperAvailable =
+                controlGripperWithJoystick && robotGripperStateReady;
+            payload.gripperOpening = gripperOpening;
 
             HandleRecordingMenuButton(joystickState.menuButton);
         }
@@ -642,6 +770,158 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             inputChannel.Send(payloadJson);
             recenterHeadsetPoseOnNextSample = false;
         }
+    }
+
+    void UpdateGripperCommand(JoystickState joystickState)
+    {
+        if (!controlGripperWithJoystick ||
+            !robotGripperStateReady)
+        {
+            return;
+        }
+
+        var rawAxis = Mathf.Clamp(joystickState.primary2DAxis.y, -1f, 1f);
+        if (Mathf.Abs(rawAxis) <= gripperJoystickDeadzone)
+        {
+            if (gripperGestureActive)
+            {
+                gripperGestureAnchorOpening = gripperOpening;
+                gripperGestureActive = false;
+            }
+            return;
+        }
+
+        if (!gripperGestureActive)
+        {
+            gripperGestureAnchorOpening = gripperOpening;
+            gripperGestureStartAxis = rawAxis;
+            gripperGestureActive = true;
+            return;
+        }
+
+        var axisDelta = Mathf.Clamp(
+            (rawAxis - gripperGestureStartAxis) /
+                Mathf.Max(0.1f, gripperJoystickTravelForFullRange),
+            -1f,
+            1f);
+        gripperOpening = OpeningRelativeToAnchor(
+            gripperGestureAnchorOpening,
+            axisDelta);
+    }
+
+    static float OpeningRelativeToAnchor(float anchorOpening, float axisDelta)
+    {
+        var anchor = Mathf.Clamp01(anchorOpening);
+        if (axisDelta < 0f)
+        {
+            return Mathf.Clamp01(anchor + (axisDelta * anchor));
+        }
+
+        return Mathf.Clamp01(anchor + (axisDelta * (1f - anchor)));
+    }
+
+    bool TryGetHeadsetPose(
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        position = default;
+        rotation = Quaternion.identity;
+
+        var source = poseSource;
+        if (source == null && Camera.main != null)
+        {
+            source = Camera.main.transform;
+        }
+        if (source == null)
+        {
+            return false;
+        }
+
+        position = source.position;
+        rotation = source.rotation;
+        return IsFinite(position) && TryNormalize(ref rotation);
+    }
+
+    bool TryCaptureWristWorkspaceAnchor(
+        WristPose wristPose,
+        Quaternion correctedRotation,
+        bool headsetPoseAvailable,
+        Vector3 headsetPosition,
+        Quaternion headsetRotation)
+    {
+        if (useHeadsetRelativeWristWorkspace)
+        {
+            if (!headsetPoseAvailable ||
+                !TryGetYawRotation(headsetRotation, out headsetWorkspaceYaw))
+            {
+                if (!headsetWorkspaceWarningLogged)
+                {
+                    Debug.LogWarning(
+                        "ViveTeleop WebRTC: headset pose is required to " +
+                        "calibrate the wrist workspace.");
+                    headsetWorkspaceWarningLogged = true;
+                }
+                return false;
+            }
+            headsetWorkspaceAnchorPosition = headsetPosition;
+        }
+        else
+        {
+            headsetWorkspaceAnchorPosition = Vector3.zero;
+            headsetWorkspaceYaw = Quaternion.identity;
+        }
+
+        if (!TryGetWristWorkspacePose(
+                wristPose,
+                correctedRotation,
+                out controllerWristAnchorPosition,
+                out controllerWristAnchorRotation))
+        {
+            return false;
+        }
+
+        headsetWorkspaceWarningLogged = false;
+        return true;
+    }
+
+    bool TryGetWristWorkspacePose(
+        WristPose wristPose,
+        Quaternion correctedRotation,
+        out Vector3 workspacePosition,
+        out Quaternion workspaceRotation)
+    {
+        workspacePosition = wristPose.position;
+        workspaceRotation = correctedRotation;
+
+        if (useHeadsetRelativeWristWorkspace)
+        {
+            var inverseYaw = Quaternion.Inverse(headsetWorkspaceYaw);
+            workspacePosition =
+                inverseYaw *
+                (wristPose.position - headsetWorkspaceAnchorPosition);
+            workspaceRotation = inverseYaw * correctedRotation;
+        }
+
+        return
+            IsFinite(workspacePosition) &&
+            TryNormalize(ref workspaceRotation);
+    }
+
+    static bool TryGetYawRotation(
+        Quaternion rotation,
+        out Quaternion yawRotation)
+    {
+        var forward = Vector3.ProjectOnPlane(
+            rotation * Vector3.forward,
+            Vector3.up);
+        if (forward.sqrMagnitude < 1e-8f)
+        {
+            yawRotation = Quaternion.identity;
+            return false;
+        }
+
+        yawRotation = Quaternion.LookRotation(forward.normalized, Vector3.up);
+        return TryNormalize(ref yawRotation);
     }
 
     static Vector3 UnityDeltaToRobot(Vector3 unityDelta)
@@ -759,6 +1039,10 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             device.TryGetFeatureValue(CommonUsages.grip, out var grip);
             device.TryGetFeatureValue(CommonUsages.primaryButton, out var primaryButton);
             device.TryGetFeatureValue(CommonUsages.menuButton, out var menuButton);
+            var primary2DAxisTouchSupported =
+                device.TryGetFeatureValue(
+                    CommonUsages.primary2DAxisTouch,
+                    out var primary2DAxisTouched);
 
             if (!hasPosition || !hasRotation)
             {
@@ -784,6 +1068,8 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
                 grip = grip,
                 primaryButton = primaryButton,
                 menuButton = menuButton,
+                primary2DAxisTouchSupported = primary2DAxisTouchSupported,
+                primary2DAxisTouched = primary2DAxisTouched,
             };
             return true;
         }
@@ -839,6 +1125,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         }
 
         var pressed = controllerState.ulButtonPressed;
+        var touched = controllerState.ulButtonTouched;
         var menuButton = IsOpenVrButtonPressed(
             pressed,
             EVRButtonId.k_EButton_ApplicationMenu);
@@ -849,9 +1136,12 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             pressed,
             EVRButtonId.k_EButton_SteamVR_Trigger);
 
+        var primary2DAxis = new Vector2(
+            controllerState.rAxis0.x,
+            controllerState.rAxis0.y);
         var trigger = Mathf.Clamp01(controllerState.rAxis1.x);
         var grip = gripButton ? 1f : 0f;
-        TryGetOpenVrActionState(ref trigger, ref grip);
+        TryGetOpenVrActionState(ref primary2DAxis, ref trigger, ref grip);
         if (triggerButton)
         {
             trigger = 1f;
@@ -866,18 +1156,23 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         };
         joystickState = new JoystickState
         {
-            primary2DAxis = new Vector2(
-                controllerState.rAxis0.x,
-                controllerState.rAxis0.y),
+            primary2DAxis = primary2DAxis,
             trigger = trigger,
             grip = grip,
             primaryButton = menuButton,
             menuButton = menuButton,
+            primary2DAxisTouchSupported = true,
+            primary2DAxisTouched = IsOpenVrButtonPressed(
+                touched,
+                EVRButtonId.k_EButton_SteamVR_Touchpad),
         };
         return true;
     }
 
-    bool TryGetOpenVrActionState(ref float trigger, ref float grip)
+    bool TryGetOpenVrActionState(
+        ref Vector2 primary2DAxis,
+        ref float trigger,
+        ref float grip)
     {
         var input = OpenVR.Input;
         if (input == null || !EnsureOpenVrActionHandles(input))
@@ -889,6 +1184,13 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         {
             ulActionSet = openVrDefaultActionSetHandle,
             ulRestrictedToDevice = OpenVR.k_ulInvalidInputValueHandle,
+            ulSecondaryActionSet = OpenVR.k_ulInvalidActionSetHandle,
+            nPriority = 0,
+        };
+        openVrActiveActionSets[1] = new VRActiveActionSet_t
+        {
+            ulActionSet = openVrTrackpadActionSetHandle,
+            ulRestrictedToDevice = openVrInputSourceHandle,
             ulSecondaryActionSet = OpenVR.k_ulInvalidActionSetHandle,
             nPriority = 0,
         };
@@ -913,6 +1215,20 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             trigger = Mathf.Max(trigger, Mathf.Clamp01(analogData.x));
         }
 
+        var trackpadData = new InputAnalogActionData_t();
+        var trackpadError = input.GetAnalogActionData(
+            openVrTrackpadActionHandle,
+            ref trackpadData,
+            (uint)Marshal.SizeOf(typeof(InputAnalogActionData_t)),
+            openVrInputSourceHandle);
+        if (trackpadError == EVRInputError.None &&
+            trackpadData.bActive &&
+            float.IsFinite(trackpadData.x) &&
+            float.IsFinite(trackpadData.y))
+        {
+            primary2DAxis = new Vector2(trackpadData.x, trackpadData.y);
+        }
+
         var triggerClick = ReadOpenVrDigitalAction(
             input,
             openVrTriggerClickActionHandle,
@@ -933,6 +1249,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
         return
             analogError == EVRInputError.None ||
+            trackpadError == EVRInputError.None ||
             triggerClickActive ||
             gripClickActive;
     }
@@ -952,6 +1269,9 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             input.GetActionSetHandle(
                 "/actions/default",
                 ref openVrDefaultActionSetHandle),
+            input.GetActionSetHandle(
+                "/actions/platformer",
+                ref openVrTrackpadActionSetHandle),
             input.GetInputSourceHandle(
                 inputSourcePath,
                 ref openVrInputSourceHandle),
@@ -964,6 +1284,9 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             input.GetActionHandle(
                 "/actions/default/in/GrabGrip",
                 ref openVrGripActionHandle),
+            input.GetActionHandle(
+                "/actions/platformer/in/Move",
+                ref openVrTrackpadActionHandle),
         };
         foreach (var error in errors)
         {
@@ -1318,6 +1641,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     {
         public bool ready;
         public RobotWristState wrist;
+        public RobotGripperState gripper;
     }
 
     [Serializable]
@@ -1326,6 +1650,12 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public string frame;
         public JsonVector3 position;
         public JsonQuaternion orientation;
+    }
+
+    [Serializable]
+    class RobotGripperState
+    {
+        public float opening;
     }
 
     [Serializable]
@@ -1373,6 +1703,16 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public bool wristAvailable;
         public bool wristCommandEnabled;
         public string wristSource;
+        public string wristWorkspace;
+        public float wristPositionScale;
+        public bool wristWorkspaceAnchorAvailable;
+        public float wristWorkspaceAnchorPx;
+        public float wristWorkspaceAnchorPy;
+        public float wristWorkspaceAnchorPz;
+        public float wristWorkspaceAnchorRx;
+        public float wristWorkspaceAnchorRy;
+        public float wristWorkspaceAnchorRz;
+        public float wristWorkspaceAnchorRw;
         public string wristFrame;
         public float wristPx;
         public float wristPy;
@@ -1394,6 +1734,8 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public float joystickTrigger;
         public float joystickGrip;
         public bool joystickPrimaryButton;
+        public bool gripperAvailable;
+        public float gripperOpening;
     }
 
     struct WristPose
@@ -1410,5 +1752,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         public float grip;
         public bool primaryButton;
         public bool menuButton;
+        public bool primary2DAxisTouchSupported;
+        public bool primary2DAxisTouched;
     }
 }

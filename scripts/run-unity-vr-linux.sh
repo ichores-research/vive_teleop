@@ -4,7 +4,13 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
 build_dir="${repo_dir}/unity-vr-headset/Builds/Linux"
-player="${build_dir}/vive-teleop.x86_64"
+player="${VIVE_TELEOP_PLAYER:-${build_dir}/vive-teleop}"
+
+if [[ ! -x "$player" && -z "${VIVE_TELEOP_PLAYER:-}" &&
+      -x "${build_dir}/vive-teleop.x86_64" ]]; then
+  player="${build_dir}/vive-teleop.x86_64"
+  printf 'Using legacy Unity player name: %s\n' "$player" >&2
+fi
 
 if [[ ! -x "$player" ]]; then
   printf 'Unity Linux player not found: %s\n' "$player" >&2
@@ -27,8 +33,11 @@ log_path="${log_dir}/player-$(date +%Y%m%d-%H%M%S).log"
 mkdir -p "$recording_dir" "$log_dir"
 
 printf 'Unity WebRTC config: %s\n' "$config_url"
+printf 'Unity player: %s\n' "$player"
 printf 'Unity player log: %s\n' "$log_path"
 printf 'Controller recordings: %s\n' "$recording_dir"
+printf 'Gripper: swipe the right control up to open or down to close.\n'
+printf "Tracking: press P to adopt the robot's current pose and restart tracking.\n"
 
 cd "$build_dir"
 exec env \

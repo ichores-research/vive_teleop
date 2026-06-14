@@ -71,5 +71,8 @@ sysinfo.txt
 
 unity-vr-headset/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
 
-ros2_app/src/image_listener/image_listener/__pycache__
-moveit_server/src/vive_moveit_server/vive_moveit_server/__pycache__
+__pycache__/
+*.py[cod]
+
+# Local controller telemetry
+recordings/*.jsonl

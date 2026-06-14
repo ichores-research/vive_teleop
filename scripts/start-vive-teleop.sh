@@ -3,6 +3,37 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
+unity_project="${repo_dir}/unity-vr-headset"
+unity_player="${unity_project}/Builds/Linux/vive-teleop"
+unity_build_stamp="${unity_player}.build-stamp"
+
+unity_build_required=false
+if [[ "${VIVE_TELEOP_FORCE_UNITY_BUILD:-0}" == "1" ||
+      ! -x "$unity_player" ||
+      ! -f "$unity_build_stamp" ||
+      "$script_dir/build-unity-vr-linux.sh" -nt "$unity_build_stamp" ]]; then
+  unity_build_required=true
+else
+  newer_unity_source="$(
+    find \
+      "$unity_project/Assets" \
+      "$unity_project/Packages" \
+      "$unity_project/ProjectSettings" \
+      -type f -newer "$unity_build_stamp" -print -quit
+  )"
+  if [[ -n "$newer_unity_source" ]]; then
+    unity_build_required=true
+  fi
+fi
+
+if [[ "${VIVE_TELEOP_SKIP_UNITY_BUILD:-0}" == "1" ]]; then
+  printf 'Skipping automatic Unity build.\n'
+elif [[ "$unity_build_required" == "true" ]]; then
+  printf 'Unity sources changed; building the Linux player.\n'
+  "$script_dir/build-unity-vr-linux.sh" "$unity_player"
+else
+  printf 'Unity Linux player is up to date.\n'
+fi
 
 "$script_dir/up-wifi-webrtc.sh" -d
 
@@ -55,6 +86,8 @@ fi
 
 printf 'Robot camera publisher is available.\n'
 
+WEBRTC_HOST_IP="$host_ip" "$script_dir/check-teleop-runtime.sh"
+
 if ! pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
   printf 'Starting SteamVR through Steam...\n'
   steam -applaunch 250820 >/dev/null 2>&1 &
@@ -73,11 +106,6 @@ done
 if ! pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
   printf 'SteamVR did not become ready within 60 seconds.\n' >&2
   exit 1
-fi
-
-if ! ping -c 1 -W 1 "$robot_ip" >/dev/null 2>&1; then
-  printf 'Warning: robot %s is not responding; arm control will wait for /joint_states.\n' \
-    "$robot_ip" >&2
 fi
 
 cd "$repo_dir"
