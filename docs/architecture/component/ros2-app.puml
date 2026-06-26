@@ -1,0 +1,52 @@
+@startuml
+!pragma layout smetana
+title component - ros2_app communication
+
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Monospace
+skinparam linetype ortho
+
+actor "Unity / Browser" as Client
+
+package "ros2_app" {
+  component "WebRTCServer" as Server
+  component "ImageSubscriber" as ImageSubscriber
+  component "LatestFrameVideoTrack" as VideoTrack
+  component "WebRtcInputPublisher" as InputPublisher
+  component "RobotInputState" as RobotState
+}
+
+package "Robot ROS 2 graph" {
+  queue "/head_front_camera/rgb/image_raw" as Camera
+  queue "/joint_states" as JointStates
+  component "TF" as Tf
+}
+
+package "Published /vive topics" {
+  queue "/vive/head_pose" as HeadPose
+  queue "/vive/hand_target_pose" as HandTarget
+  queue "/vive/hand_target_active" as HandActive
+  queue "/vive/gripper_opening" as GripperOpening
+}
+
+Client --> Server : /config\n/offer\n/input_offer\n/robot_state
+Server --> Client : WebRTC video
+Client --> Server : data-channel JSON
+
+Camera --> ImageSubscriber : Image
+ImageSubscriber --> VideoTrack : BGR frame
+VideoTrack --> Server : media track
+
+Server --> InputPublisher : payload
+InputPublisher --> HeadPose
+InputPublisher --> HandTarget
+InputPublisher --> HandActive
+InputPublisher --> GripperOpening
+
+JointStates --> RobotState : head/gripper
+Tf --> RobotState : wrist/head transforms
+RobotState --> Server : snapshot dict
+
+@enduml

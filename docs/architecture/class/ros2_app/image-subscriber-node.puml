@@ -1,0 +1,44 @@
+@startuml
+title class diagram - image subscriber and video track
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+class ImageSubscriber <<rclpy.node.Node>> {
+  +bridge: CvBridge
+  -_frame_sink: LatestFrameVideoTrack
+  -_event_loop: asyncio.AbstractEventLoop
+  -_image_topic: str
+  -_subscription
+  +callback(msg: sensor_msgs/Image): void
+  +main(args): void
+}
+
+class LatestFrameVideoTrack <<aiortc.VideoStreamTrack>> {
+  -_frame: numpy.ndarray | None
+  -_new_frame_event: asyncio.Event
+  +update_frame(frame: numpy.ndarray): void
+  +recv(): VideoFrame
+}
+
+class CvBridge {
+  +imgmsg_to_cv2(msg, desired_encoding): ndarray
+}
+
+class VideoFrame {
+  +from_ndarray(frame, format): VideoFrame
+  +pts
+  +time_base
+}
+
+ImageSubscriber --> CvBridge : converts ROS Image to BGR
+ImageSubscriber --> LatestFrameVideoTrack : call_soon_threadsafe(update_frame)
+LatestFrameVideoTrack --> VideoFrame : creates aiortc frame
+
+note bottom of LatestFrameVideoTrack
+  Keeps only the newest frame.
+  No replay queue is used for camera video.
+end note
+
+@enduml

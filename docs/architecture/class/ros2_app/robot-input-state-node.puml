@@ -1,0 +1,57 @@
+@startuml
+title class diagram - RobotInputState node
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+class RobotInputState <<rclpy.node.Node>> {
+  -_reference_frame: str
+  -_hand_frame: str
+  -_head_frame: str
+  -_head_pan_joint: str
+  -_head_tilt_joint: str
+  -_gripper_left_joint: str
+  -_gripper_right_joint: str
+  -_gripper_min_position_m: float
+  -_gripper_max_position_m: float
+  -_head_pan_sign: float
+  -_head_tilt_sign: float
+  -_max_state_age_sec: float
+  -_joint_positions: dict[str, float]
+  -_last_joint_state_sec: float
+  -_joint_lock: threading.Lock
+  -_tf_buffer: tf2_ros.Buffer
+  -_tf_listener: TransformListener
+  -_on_joint_state(message: JointState): void
+  +get_snapshot(): dict
+  -_lookup_transform(source_frame, errors): TransformStamped | None
+}
+
+class JointState {
+  +name: string[]
+  +position: float[]
+}
+
+class Buffer {
+  +lookup_transform(target_frame, source_frame, time)
+}
+
+class TransformListener
+
+class "helper functions" as Helpers {
+  +_head_command_quaternion(pan, tilt, pan_sign, tilt_sign): dict
+  +_transform_pose(transform): dict
+}
+
+RobotInputState --> JointState : subscribes /joint_states
+RobotInputState --> Buffer : lookup wrist/head TF
+RobotInputState --> TransformListener : owns listener
+RobotInputState --> Helpers : formats snapshot fields
+
+note bottom of RobotInputState
+  /robot_state returns ready=false when required
+  joint states or transforms are missing or stale.
+end note
+
+@enduml

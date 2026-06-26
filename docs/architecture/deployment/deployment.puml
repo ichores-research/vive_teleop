@@ -1,0 +1,67 @@
+@startuml
+!pragma layout smetana
+title vive_teleop deployment
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+node "Operator workstation" as Host {
+  artifact "Unity Linux player\nunity-vr-headset/Builds/Linux/vive-teleop" as UnityPlayer
+  artifact "Browser debug client\nindex.html" as Browser
+  artifact "Startup scripts\nscripts/*.sh" as Scripts
+  folder "logs/<timestamp>/" as Logs
+}
+
+node "Docker / host-network runtime" as Docker {
+  node "ros2_app_wifi\nport 8088" as Ros2App
+  node "moveit_server_wifi" as MoveItServer
+  node "coturn_wifi\nUDP/TCP 3478" as Coturn
+  artifact "/tmp/cyclonedds.xml" as CycloneConfig
+}
+
+node "Robot network" as RobotNetwork {
+  node "TIAGo robot\n10.68.0.1\nROS_DOMAIN_ID=67" as Robot {
+    queue "/head_front_camera/rgb/image_raw" as Camera
+    queue "/joint_states" as JointStates
+    component "TF tree" as TfTree
+    queue "/head_controller/joint_trajectory" as HeadController
+    queue "/arm_controller/joint_trajectory" as ArmController
+    queue "/gripper_controller/joint_trajectory" as GripperController
+  }
+}
+
+Scripts --> Docker : docker compose up --build
+Scripts --> UnityPlayer : build/run
+Scripts --> Logs : startup + validation logs
+UnityPlayer --> Logs : unity-player.log
+Ros2App --> Logs : ros2_app_wifi.log
+MoveItServer --> Logs : moveit_server_wifi.log
+Coturn --> Logs : coturn_wifi.log
+
+UnityPlayer --> Ros2App : HTTP/WebRTC\n/config /offer /input_offer\nport 8088
+Browser --> Ros2App : HTTP/WebRTC\n/config /robot_state /offer /input_offer
+UnityPlayer .. Coturn : ICE TURN candidates
+Browser .. Coturn : ICE TURN candidates
+
+Ros2App --> Robot : ROS 2 DDS\ncamera, joint states, TF
+MoveItServer --> Robot : ROS 2 DDS\njoint states, TF, controllers
+CycloneConfig --> Ros2App : discovery peer + interface
+CycloneConfig --> MoveItServer : discovery peer + interface
+
+Camera --> Ros2App : image frames
+JointStates --> Ros2App : head/gripper state
+TfTree --> Ros2App : wrist/head snapshot TF
+JointStates --> MoveItServer : robot state
+TfTree --> MoveItServer : wrist anchor/current pose
+MoveItServer --> HeadController : head trajectory
+MoveItServer --> ArmController : Servo output trajectory
+MoveItServer --> GripperController : gripper trajectory
+
+note bottom of Docker
+  Wi-Fi mode uses host networking.
+  Field mode uses docker-compose.yml ipvlan addresses:
+  ros2_app=10.68.0.132, coturn=10.68.0.133, moveit_server=10.68.0.134.
+end note
+
+@enduml
