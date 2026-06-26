@@ -27,8 +27,8 @@ fi
 config_url="${VIVE_TELEOP_WEBRTC_CONFIG_URL:-http://${host_ip}:8088/config}"
 recording_dir="${VIVE_TELEOP_RECORDING_DIR:-${repo_dir}/recordings}"
 record_controller="${VIVE_TELEOP_RECORD_CONTROLLER:-1}"
-log_dir="${build_dir}/logs"
-log_path="${log_dir}/player-$(date +%Y%m%d-%H%M%S).log"
+log_dir="${VIVE_TELEOP_LOG_DIR:-${repo_dir}/logs}"
+log_path="${log_dir}/unity-player.log"
 
 mkdir -p "$recording_dir" "$log_dir"
 

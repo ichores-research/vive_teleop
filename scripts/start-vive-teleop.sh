@@ -3,9 +3,69 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
+log_root="${VIVE_TELEOP_LOG_ROOT:-${repo_dir}/logs}"
+run_stamp="$(date +%Y%m%d-%H%M%S)"
+run_log_dir="${VIVE_TELEOP_RUN_LOG_DIR:-${log_root}/${run_stamp}}"
+startup_log="${run_log_dir}/start-vive-teleop.log"
+run_started_epoch="$(date +%s)"
 unity_project="${repo_dir}/unity-vr-headset"
 unity_player="${unity_project}/Builds/Linux/vive-teleop"
 unity_build_stamp="${unity_player}.build-stamp"
+log_follow_pids=()
+
+mkdir -p "$run_log_dir"
+exec > >(tee -a "$startup_log") 2>&1
+
+log() {
+  printf '[%(%Y-%m-%dT%H:%M:%S%z)T] %s\n' -1 "$*"
+}
+
+run_and_log() {
+  local label="$1"
+  local log_path="$2"
+  shift 2
+
+  log "Starting ${label}; detailed log: ${log_path}"
+  "$@" > >(tee -a "$log_path") 2> >(tee -a "$log_path" >&2)
+  log "Finished ${label}"
+}
+
+start_container_log() {
+  local container="$1"
+  local log_path="${run_log_dir}/${container}.log"
+
+  : > "$log_path"
+  if ! docker ps --format '{{.Names}}' | grep -Fxq "$container"; then
+    log "Container ${container} is not running; log capture skipped"
+    return
+  fi
+
+  log "Capturing ${container} output to ${log_path}"
+  docker logs --timestamps --follow --since "$run_started_epoch" "$container" \
+    >>"$log_path" 2>&1 &
+  log_follow_pids+=("$!")
+}
+
+stop_background_logs() {
+  local status=$?
+
+  if [[ "${#log_follow_pids[@]}" -gt 0 ]]; then
+    log "Stopping background Docker log followers"
+    for pid in "${log_follow_pids[@]}"; do
+      kill "$pid" >/dev/null 2>&1 || true
+    done
+    wait "${log_follow_pids[@]}" >/dev/null 2>&1 || true
+  fi
+
+  log "Run log directory: ${run_log_dir}"
+  log "start-vive-teleop exiting with status ${status}"
+}
+
+trap stop_background_logs EXIT
+
+log "vive_teleop startup begin"
+log "Repository: ${repo_dir}"
+log "Run log directory: ${run_log_dir}"
 
 unity_build_required=false
 if [[ "${VIVE_TELEOP_FORCE_UNITY_BUILD:-0}" == "1" ||
@@ -27,15 +87,25 @@ else
 fi
 
 if [[ "${VIVE_TELEOP_SKIP_UNITY_BUILD:-0}" == "1" ]]; then
-  printf 'Skipping automatic Unity build.\n'
+  log "Skipping automatic Unity build"
 elif [[ "$unity_build_required" == "true" ]]; then
-  printf 'Unity sources changed; building the Linux player.\n'
-  "$script_dir/build-unity-vr-linux.sh" "$unity_player"
+  log "Unity sources changed; building the Linux player"
+  run_and_log \
+    "Unity Linux player build" \
+    "${run_log_dir}/unity-build.log" \
+    "$script_dir/build-unity-vr-linux.sh" "$unity_player"
 else
-  printf 'Unity Linux player is up to date.\n'
+  log "Unity Linux player is up to date"
 fi
 
-"$script_dir/up-wifi-webrtc.sh" -d
+run_and_log \
+  "Docker Compose Wi-Fi WebRTC stack" \
+  "${run_log_dir}/docker-compose-up.log" \
+  "$script_dir/up-wifi-webrtc.sh" -d
+
+start_container_log "ros2_app_wifi"
+start_container_log "moveit_server_wifi"
+start_container_log "coturn_wifi"
 
 host_ip="$("$script_dir/detect-webrtc-host-ip.sh")"
 config_url="http://${host_ip}:8088/config"
@@ -43,7 +113,7 @@ robot_ip="${ROBOT_IP:-10.68.0.1}"
 camera_topic="${ROBOT_CAMERA_TOPIC:-/head_front_camera/rgb/image_raw}"
 camera_wait_seconds="${ROBOT_CAMERA_WAIT_SECONDS:-45}"
 
-printf 'Waiting for WebRTC signaling at %s\n' "$config_url"
+log "Waiting for WebRTC signaling at ${config_url}"
 for _attempt in $(seq 1 60); do
   if curl --fail --silent --max-time 1 "$config_url" >/dev/null; then
     break
@@ -52,11 +122,12 @@ for _attempt in $(seq 1 60); do
 done
 
 if ! curl --fail --silent --max-time 2 "$config_url" >/dev/null; then
-  printf 'WebRTC signaling did not become ready: %s\n' "$config_url" >&2
+  log "WebRTC signaling did not become ready: ${config_url}"
   exit 1
 fi
+log "WebRTC signaling is ready"
 
-printf 'Waiting for robot camera publisher on %s\n' "$camera_topic"
+log "Waiting for robot camera publisher on ${camera_topic}"
 camera_publisher_count=""
 for _attempt in $(seq 1 "$camera_wait_seconds"); do
   camera_publisher_count="$(
@@ -73,29 +144,29 @@ done
 
 if [[ ! "$camera_publisher_count" =~ ^[1-9][0-9]*$ ]]; then
   if ping -c 1 -W 1 "$robot_ip" >/dev/null 2>&1; then
-    printf 'Robot %s is online, but ROS2 has no publisher for %s.\n' \
-      "$robot_ip" "$camera_topic" >&2
-    printf 'Start the robot ROS2 bringup/camera application at http://%s, then rerun this script.\n' \
-      "$robot_ip" >&2
+    log "Robot ${robot_ip} is online, but ROS2 has no publisher for ${camera_topic}"
+    log "Start the robot ROS2 bringup/camera application at http://${robot_ip}, then rerun this script"
   else
-    printf 'Robot %s is unreachable, so camera video cannot start.\n' \
-      "$robot_ip" >&2
+    log "Robot ${robot_ip} is unreachable, so camera video cannot start"
   fi
   exit 1
 fi
 
-printf 'Robot camera publisher is available.\n'
+log "Robot camera publisher is available"
 
-WEBRTC_HOST_IP="$host_ip" "$script_dir/check-teleop-runtime.sh"
+run_and_log \
+  "teleop runtime validation" \
+  "${run_log_dir}/check-teleop-runtime.log" \
+  env WEBRTC_HOST_IP="$host_ip" "$script_dir/check-teleop-runtime.sh"
 
 if ! pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
-  printf 'Starting SteamVR through Steam...\n'
-  steam -applaunch 250820 >/dev/null 2>&1 &
+  log "Starting SteamVR through Steam; detailed log: ${run_log_dir}/steamvr-start.log"
+  steam -applaunch 250820 >"${run_log_dir}/steamvr-start.log" 2>&1 &
 else
-  printf 'SteamVR is already running.\n'
+  log "SteamVR is already running"
 fi
 
-printf 'Waiting for SteamVR server...\n'
+log "Waiting for SteamVR server"
 for _attempt in $(seq 1 60); do
   if pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
     break
@@ -104,9 +175,15 @@ for _attempt in $(seq 1 60); do
 done
 
 if ! pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
-  printf 'SteamVR did not become ready within 60 seconds.\n' >&2
+  log "SteamVR did not become ready within 60 seconds"
   exit 1
 fi
+log "SteamVR server is ready"
 
 cd "$repo_dir"
-exec "$script_dir/run-unity-vr-linux.sh" "$@"
+log "Starting Unity player; wrapper log: ${run_log_dir}/unity-wrapper.log"
+run_and_log \
+  "Unity player" \
+  "${run_log_dir}/unity-wrapper.log" \
+  env VIVE_TELEOP_LOG_DIR="$run_log_dir" \
+    "$script_dir/run-unity-vr-linux.sh" "$@"
