@@ -1,6 +1,6 @@
 @startuml
 !pragma layout smetana
-title component - ros2_app communication
+title component - webrtc_server communication
 
 left to right direction
 skinparam componentStyle rectangle
@@ -10,7 +10,7 @@ skinparam linetype ortho
 
 actor "Unity / Browser" as Client
 
-package "ros2_app" {
+package "webrtc_server" {
   component "WebRTCServer" as Server
   component "ImageSubscriber" as ImageSubscriber
   component "LatestFrameVideoTrack" as VideoTrack

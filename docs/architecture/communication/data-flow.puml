@@ -6,10 +6,10 @@ skinparam defaultFontName Monospace
 
 actor Operator
 participant "Unity or browser" as Client
-participant "WebRTCServer\nros2_app" as Server
+participant "WebRTCServer\nwebrtc_server" as Server
 participant "ImageSubscriber\n+ VideoTrack" as Video
-participant "InputPublisher\nros2_app" as Input
-participant "RobotInputState\nros2_app" as Snapshot
+participant "InputPublisher\nwebrtc_server" as Input
+participant "RobotInputState\nwebrtc_server" as Snapshot
 participant "ViveMoveItServer\nmoveit_server" as Teleop
 participant "ServoPoseBridge" as Bridge
 participant "MoveIt Servo" as Servo

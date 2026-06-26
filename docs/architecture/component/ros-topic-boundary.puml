@@ -9,7 +9,7 @@ skinparam defaultFontName Monospace
 skinparam linetype ortho
 
 component "Clients\nUnity / Browser" as Clients
-component "ros2_app\nInputPublisher" as InputPublisher
+component "webrtc_server\nInputPublisher" as InputPublisher
 component "moveit_server\nViveMoveItServer" as Teleop
 component "ServoPoseBridge" as Bridge
 component "MoveIt Servo" as Servo

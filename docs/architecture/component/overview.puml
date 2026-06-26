@@ -11,28 +11,28 @@ skinparam linetype ortho
 actor "Unity VR" as Unity
 actor "Browser debug" as Browser
 
-component "ros2_app\nWebRTC gateway" as Ros2App
+component "webrtc_server\nWebRTC gateway" as WebRtcServer
 component "moveit_server\nteleop control" as MoveItServer
 component "TIAGo robot\nROS 2 graph" as Robot
 component "coturn\nTURN relay" as Coturn
 database "logs/<timestamp>" as Logs
 
-Unity --> Ros2App : HTTP config/signaling\nWebRTC video + input
-Browser --> Ros2App : HTTP config/state/signaling\nWebRTC video + input
+Unity --> WebRtcServer : HTTP config/signaling\nWebRTC video + input
+Browser --> WebRtcServer : HTTP config/state/signaling\nWebRTC video + input
 Unity .. Coturn : ICE relay
 Browser .. Coturn : ICE relay
 
-Ros2App --> MoveItServer : /vive/* ROS 2 topics
-Robot --> Ros2App : camera, joint states, TF
+WebRtcServer --> MoveItServer : /vive/* ROS 2 topics
+Robot --> WebRtcServer : camera, joint states, TF
 Robot --> MoveItServer : joint states, TF, robot model
 MoveItServer --> Robot : head, arm, gripper trajectories
 
-Ros2App --> Logs : ros2_app_wifi.log
+WebRtcServer --> Logs : webrtc_server_wifi.log
 MoveItServer --> Logs : moveit_server_wifi.log
 Coturn --> Logs : coturn_wifi.log
 Unity --> Logs : unity-player.log
 
-note bottom of Ros2App
+note bottom of WebRtcServer
   JSON data-channel payloads become typed ROS 2 topics here.
 end note
 

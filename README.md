@@ -17,7 +17,7 @@ The script:
 
 1. Detects the Wi-Fi and robot-facing Ethernet addresses.
 2. Rebuilds the Unity Linux player when its sources or project settings changed.
-3. Builds and starts `ros2_app_wifi`, `moveit_server_wifi`, and `coturn_wifi`.
+3. Builds and starts `webrtc_server_wifi`, `moveit_server_wifi`, and `coturn_wifi`.
 4. Waits for `http://<wifi-ip>:8088/config`.
 5. Waits for the robot camera, wrist TF, joint states, and gripper state.
 6. Verifies uncapped pose-bridge velocity, the deadman halt gate, automatic
@@ -29,7 +29,7 @@ Use `Ctrl+C` in that terminal to stop the Unity player. Stop the containers with
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
-  ros2_app_wifi moveit_server_wifi coturn_wifi
+  webrtc_server_wifi moveit_server_wifi coturn_wifi
 ```
 
 SteamVR is managed separately by Steam and can be closed from the SteamVR window.
@@ -83,7 +83,7 @@ Useful health checks:
 
 ```bash
 docker ps --format '{{.Names}}\t{{.Status}}' |
-  grep -E 'ros2_app_wifi|moveit_server_wifi|coturn_wifi'
+  grep -E 'webrtc_server_wifi|moveit_server_wifi|coturn_wifi'
 
 WEBRTC_HOST_IP="$(./scripts/detect-webrtc-host-ip.sh)"
 curl -s "http://${WEBRTC_HOST_IP}:8088/config" | python3 -m json.tool
@@ -98,7 +98,7 @@ and validate the seven-joint Servo configuration.
 
 The current system has four main pieces:
 
-- `ros2_app`: ROS2 Humble application. It subscribes directly to the robot's `/head_front_camera/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
+- `webrtc_server`: ROS2 Humble application. It subscribes directly to the robot's `/head_front_camera/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
 - `moveit_server`: ROS2 teleoperation node. It converts raw HMD orientation into head trajectories, sends wrist pose targets through MoveIt Servo, and publishes direct two-finger gripper trajectories.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
@@ -112,26 +112,45 @@ The WebRTC server code is separated from ROS subscriber/publisher logic:
 - `image_listener/robot_state.py`: live robot head, wrist, and gripper snapshot provider used to initialize debug input safely.
 - `image_listener/teleop_webrtc.py`: composition entry point used through `image_subscriber`.
 
-See [architecture.puml](architecture.puml) for the PlantUML source. Regenerate [architecture.png](architecture.png) from it when a rendered diagram is needed.
+The architecture diagram set lives in [docs/architecture](docs/architecture):
+
+- `deployment/deployment.puml`: where the system runs and the highest-level connections.
+- `component/overview.puml`: small top-level component view.
+- `component/*.puml`: focused component views for gateway, MoveIt, and ROS topic boundaries.
+- `communication/data-flow.puml`: brief startup, video, input, and command data flow.
+- `class/**/*.puml`: internals for the runtime nodes and Unity client class.
+
+Regenerate the PNGs in that folder from their `.puml` files when rendered
+diagrams are needed.
+
+## Runtime logs
+
+`scripts/start-vive-teleop.sh` writes each run to `logs/<timestamp>/` by
+default. Override the parent directory with `VIVE_TELEOP_LOG_ROOT` or set an
+exact run directory with `VIVE_TELEOP_RUN_LOG_DIR`.
+
+Each run captures separate files for startup, Docker Compose, `webrtc_server_wifi`,
+`moveit_server_wifi`, `coturn_wifi`, runtime validation, SteamVR launch, Unity
+wrapper output, and the Unity player log.
 
 ## Network Layout
 
 Runtime containers use the `field_net` ipvlan network:
 
 - Robot / ROS2 graph: `10.68.0.1`
-- `ros2_app`: `10.68.0.132`
+- `webrtc_server`: `10.68.0.132`
 - `coturn`: `10.68.0.133`
 - `moveit_server`: `10.68.0.134`
 
 The ROS2 containers use CycloneDDS on domain `67` by default, matching the robot, with `10.68.0.1` configured as a discovery peer. Override `ROS_DOMAIN_ID` if the robot configuration changes. The existing container and robot addresses are unchanged; `10.68.0.131` is no longer used.
 
-`ros2_app` publishes `8088:8088`, but direct host access can still depend on the ipvlan host-interface setup. If the browser cannot reach `http://localhost:8088`, create the host ipvlan interface shown at the bottom of `docker-compose.yml` and try direct container access at `http://10.68.0.132:8088`.
+`webrtc_server` publishes `8088:8088`, but direct host access can still depend on the ipvlan host-interface setup. If the browser cannot reach `http://localhost:8088`, create the host ipvlan interface shown at the bottom of `docker-compose.yml` and try direct container access at `http://10.68.0.132:8088`.
 
 Both Docker builds use `network: host` so package installs do not depend on Docker's default build bridge network.
 
 ## WebRTC API
 
-`ros2_app` listens on `0.0.0.0:8088`.
+`webrtc_server` listens on `0.0.0.0:8088`.
 
 ### `POST /offer`
 
@@ -183,7 +202,7 @@ The gripper portion of a ready response has this form:
 
 `opening` is calculated from the average measured finger position. The raw left and right positions are included for diagnosis.
 
-When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages:
+When a payload includes pose fields, `webrtc_server` publishes standard ROS2 messages:
 
 - `/vive/head_pose`: `geometry_msgs/PoseStamped` copied from the HMD pose.
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped` using the joystick wrist position and calibrated `robotWristR*` orientation.
@@ -192,7 +211,7 @@ When a payload includes pose fields, `ros2_app` publishes standard ROS2 messages
 
 ## MoveIt server
 
-The separate `moveit_server` container joins the same CycloneDDS graph as `ros2_app` and the robot. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, `robot_state_publisher`, MoveIt Servo, the Servo pose bridge, and the teleop node.
+The separate `moveit_server` container joins the same CycloneDDS graph as `webrtc_server` and the robot. It is implemented in Python. By default the container starts Humble's `tiago_moveit_config` `move_group.launch.py`, `robot_state_publisher`, MoveIt Servo, the Servo pose bridge, and the teleop node.
 
 The teleop node is split by responsibility:
 
@@ -309,7 +328,7 @@ For Docker services only:
 ./scripts/up-wifi-webrtc.sh -d
 ```
 
-This starts the host-network `ros2_app_wifi`, `moveit_server_wifi`, and
+This starts the host-network `webrtc_server_wifi`, `moveit_server_wifi`, and
 `coturn_wifi` services. The MoveIt container needs live robot `/joint_states`
 and the TIAGo robot description before Servo can command the physical arm.
 Validate those services and the live robot state with:
@@ -351,12 +370,12 @@ WEBRTC_NIC=wlan0 ./scripts/up-wifi-webrtc.sh
 
 The script detects the current Wi-Fi host IP, exports `WEBRTC_HOST_IP`, detects the field-network host IP as `ROS_FIELD_HOST_IP`, generates a matching CycloneDDS config, and starts host-network Wi-Fi variants:
 
-- `ros2_app_wifi` on the host network, so WebRTC signaling and media are reachable through the host Wi-Fi IP.
+- `webrtc_server_wifi` on the host network, so WebRTC signaling and media are reachable through the host Wi-Fi IP.
 - `moveit_server_wifi` on the host network, using the same ROS2 DDS interface as the app.
 - `coturn_wifi` on the host network, listening on both the Wi-Fi IP and the field-network host IP.
 - direct robot discovery through `ROS_FIELD_HOST_IP` by default, with `10.68.0.1` as the DDS peer.
 - client-side ICE with `WEBRTC_PUBLIC_TURN_URLS=turn:<wifi-host-ip>:3478?...`.
-- server-side ICE with `WEBRTC_TURN_URLS=turn:127.0.0.1:3478?...` inside the host-network ROS2 app.
+- server-side ICE with `WEBRTC_TURN_URLS=turn:127.0.0.1:3478?...` inside the host-network WebRTC server.
 
 This avoids passing WebRTC media through Docker port publishing; Unity and browser clients talk directly to the host Wi-Fi IP.
 
@@ -385,8 +404,8 @@ It returns the signaling URLs and client-facing ICE server list.
 
 For browser debugging:
 
-1. Wait for `ros2_app_wifi` logs to show `======== Running on http://0.0.0.0:8088 ========`.
-2. Check direct robot discovery with `docker exec ros2_app_wifi bash -lc 'source /opt/ros/humble/setup.bash && ros2 topic list'`.
+1. Wait for `webrtc_server_wifi` logs to show `======== Running on http://0.0.0.0:8088 ========`.
+2. Check direct robot discovery with `docker exec webrtc_server_wifi bash -lc 'source /opt/ros/humble/setup.bash && ros2 topic list'`.
 3. If the debug page is served by this host, try `Host :8088` first.
 4. If the debug page is served from another PC, set `Server` to `http://<host-ip>:8088` manually.
 5. Click `Start Video` to connect to `/offer`.
@@ -504,7 +523,7 @@ current robot pose.
 Inspect the current service logs:
 
 ```bash
-docker logs --tail 100 ros2_app_wifi
+docker logs --tail 100 webrtc_server_wifi
 docker logs --tail 150 moveit_server_wifi
 ```
 
@@ -513,7 +532,7 @@ If the browser shows a fetch/network error for `/offer` or `/input_offer`, WebRT
 Check:
 
 ```bash
-sudo docker compose logs ros2_app
+sudo docker compose logs webrtc_server
 curl -i http://localhost:8088/offer
 curl -i http://10.68.0.132:8088/offer
 ```

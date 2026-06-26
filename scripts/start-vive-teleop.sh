@@ -103,7 +103,7 @@ run_and_log \
   "${run_log_dir}/docker-compose-up.log" \
   "$script_dir/up-wifi-webrtc.sh" -d
 
-start_container_log "ros2_app_wifi"
+start_container_log "webrtc_server_wifi"
 start_container_log "moveit_server_wifi"
 start_container_log "coturn_wifi"
 
@@ -131,7 +131,7 @@ log "Waiting for robot camera publisher on ${camera_topic}"
 camera_publisher_count=""
 for _attempt in $(seq 1 "$camera_wait_seconds"); do
   camera_publisher_count="$(
-    timeout 3 docker exec ros2_app_wifi bash -lc \
+    timeout 3 docker exec webrtc_server_wifi bash -lc \
       'source /opt/ros/humble/setup.bash && ros2 topic info "$1"' \
       _ "$camera_topic" 2>/dev/null |
       awk '/Publisher count:/ { print $3; exit }' || true

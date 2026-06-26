@@ -14,7 +14,7 @@ node "Operator workstation" as Host {
 }
 
 node "Docker / host-network runtime" as Docker {
-  node "ros2_app_wifi\nport 8088" as Ros2App
+  node "webrtc_server_wifi\nport 8088" as WebRtcServer
   node "moveit_server_wifi" as MoveItServer
   node "coturn_wifi\nUDP/TCP 3478" as Coturn
   artifact "/tmp/cyclonedds.xml" as CycloneConfig
@@ -35,23 +35,23 @@ Scripts --> Docker : docker compose up --build
 Scripts --> UnityPlayer : build/run
 Scripts --> Logs : startup + validation logs
 UnityPlayer --> Logs : unity-player.log
-Ros2App --> Logs : ros2_app_wifi.log
+WebRtcServer --> Logs : webrtc_server_wifi.log
 MoveItServer --> Logs : moveit_server_wifi.log
 Coturn --> Logs : coturn_wifi.log
 
-UnityPlayer --> Ros2App : HTTP/WebRTC\n/config /offer /input_offer\nport 8088
-Browser --> Ros2App : HTTP/WebRTC\n/config /robot_state /offer /input_offer
+UnityPlayer --> WebRtcServer : HTTP/WebRTC\n/config /offer /input_offer\nport 8088
+Browser --> WebRtcServer : HTTP/WebRTC\n/config /robot_state /offer /input_offer
 UnityPlayer .. Coturn : ICE TURN candidates
 Browser .. Coturn : ICE TURN candidates
 
-Ros2App --> Robot : ROS 2 DDS\ncamera, joint states, TF
+WebRtcServer --> Robot : ROS 2 DDS\ncamera, joint states, TF
 MoveItServer --> Robot : ROS 2 DDS\njoint states, TF, controllers
-CycloneConfig --> Ros2App : discovery peer + interface
+CycloneConfig --> WebRtcServer : discovery peer + interface
 CycloneConfig --> MoveItServer : discovery peer + interface
 
-Camera --> Ros2App : image frames
-JointStates --> Ros2App : head/gripper state
-TfTree --> Ros2App : wrist/head snapshot TF
+Camera --> WebRtcServer : image frames
+JointStates --> WebRtcServer : head/gripper state
+TfTree --> WebRtcServer : wrist/head snapshot TF
 JointStates --> MoveItServer : robot state
 TfTree --> MoveItServer : wrist anchor/current pose
 MoveItServer --> HeadController : head trajectory
@@ -61,7 +61,7 @@ MoveItServer --> GripperController : gripper trajectory
 note bottom of Docker
   Wi-Fi mode uses host networking.
   Field mode uses docker-compose.yml ipvlan addresses:
-  ros2_app=10.68.0.132, coturn=10.68.0.133, moveit_server=10.68.0.134.
+  webrtc_server=10.68.0.132, coturn=10.68.0.133, moveit_server=10.68.0.134.
 end note
 
 @enduml
