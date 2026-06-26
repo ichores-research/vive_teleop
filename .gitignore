@@ -57,6 +57,7 @@ desktop.ini
 *.exe
 *.app
 *.unitypackage
+.*
 
 # =========================
 # Crash / logs
