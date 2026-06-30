@@ -532,7 +532,17 @@ Builds can override the scene URL with either `VIVE_TELEOP_WEBRTC_CONFIG_URL` or
 --webrtc-config-url=http://<host-ip>:8088/config
 ```
 
-Build a Linux player after closing the project in the Unity editor:
+Run every software check, including ROS tests and a Unity Linux compilation:
+
+```bash
+./test.sh
+```
+
+Individual test modes are available as `--static`, `--ros`, and `--unity`.
+The Unity mode uses the editor version declared in
+`ProjectSettings/ProjectVersion.txt`, or the `UNITY_EDITOR` override.
+
+To build only the Linux player after closing the project in the Unity editor:
 
 ```bash
 ./scripts/build-unity-vr-linux.sh
