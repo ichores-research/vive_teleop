@@ -535,7 +535,7 @@ Builds can override the scene URL with either `VIVE_TELEOP_WEBRTC_CONFIG_URL` or
 Run every software check, including ROS tests and a Unity Linux compilation:
 
 ```bash
-./test.sh
+./scripts/test-software.sh
 ```
 
 Individual test modes are available as `--static`, `--ros`, and `--unity`.

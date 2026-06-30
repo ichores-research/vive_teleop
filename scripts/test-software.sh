@@ -7,7 +7,7 @@ ros_test_image="${ROS_TEST_IMAGE:-ros:humble}"
 
 usage() {
   cat <<'EOF'
-Usage: ./test.sh [--all|--static|--ros|--unity]
+Usage: ./scripts/test-software.sh [--all|--static|--ros|--unity]
 
   --all     Run static checks, ROS tests, and compile the Unity Linux player.
             This is the default.

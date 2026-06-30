@@ -18,14 +18,14 @@ ROS_FIELD_HOST_IP=192.0.2.20 \
 while IFS= read -r script; do
   bash -n "$script"
 done < <(find scripts -maxdepth 1 -type f -name '*.sh' -print)
-bash -n test.sh moveit_server/ros_entrypoint.sh
+bash -n moveit_server/ros_entrypoint.sh
 
 if command -v shellcheck >/dev/null 2>&1; then
   mapfile -t shell_scripts < <(
     find scripts -maxdepth 1 -type f -name '*.sh' -print
   )
   shellcheck --exclude=SC1090,SC1091,SC2016 \
-    test.sh moveit_server/ros_entrypoint.sh "${shell_scripts[@]}"
+    moveit_server/ros_entrypoint.sh "${shell_scripts[@]}"
 fi
 
 python3 - <<'PY'
