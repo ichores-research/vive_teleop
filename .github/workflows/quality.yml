@@ -26,14 +26,27 @@ jobs:
           fi
 
       - name: Run non-hardware checks
-        run: ./test.sh --static
+        run: ./scripts/test-software.sh --static
 
   ros-python:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Run ROS Python tests in Humble
-        run: ./test.sh
+        run: ./scripts/test-software.sh --ros
+
+  unity-linux:
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, Linux, X64, vive-teleop-unity]
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Compile Unity Linux player
+        run: ./scripts/test-software.sh --unity

@@ -20,6 +20,7 @@ mkdir -p "$(dirname "${output_path}")"
 
 "${unity_editor}" \
   -batchmode \
+  -nographics \
   -quit \
   -projectPath "${project_dir}" \
   -buildLinux64Player "${output_path}" \
