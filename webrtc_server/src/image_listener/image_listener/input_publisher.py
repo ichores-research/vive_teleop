@@ -11,6 +11,7 @@ DEFAULT_HEAD_POSE_TOPIC = "/vive/head_pose"
 DEFAULT_HAND_TARGET_TOPIC = "/vive/hand_target_pose"
 DEFAULT_HAND_TARGET_ACTIVE_TOPIC = "/vive/hand_target_active"
 DEFAULT_GRIPPER_TARGET_TOPIC = "/vive/gripper_opening"
+MAX_INPUT_PAYLOAD_BYTES = 64 * 1024
 
 
 class WebRtcInputPublisher(Node):
@@ -45,6 +46,15 @@ class WebRtcInputPublisher(Node):
 
     def publish_input(self, payload: str | bytes) -> None:
         payload_text = self._serialize_payload(payload)
+        if (
+            len(payload_text.encode("utf-8", errors="replace"))
+            > MAX_INPUT_PAYLOAD_BYTES
+        ):
+            self.get_logger().warning(
+                "Ignoring WebRTC input larger than 64 KiB"
+            )
+            return
+
         data = self._parse_json_object(payload_text)
         if data is not None:
             self._publish_head_pose(data)
@@ -77,7 +87,7 @@ class WebRtcInputPublisher(Node):
         return data
 
     def _publish_head_pose(self, data: dict[str, Any]) -> None:
-        if not data.get("hmdAvailable"):
+        if data.get("hmdAvailable") is not True:
             return
 
         message = self._extract_pose(
@@ -94,8 +104,11 @@ class WebRtcInputPublisher(Node):
 
     def _publish_hand_target(self, data: dict[str, Any]) -> None:
         if (
-            not data.get("wristAvailable")
-            or data.get("wristCommandEnabled") is False
+            data.get("wristAvailable") is not True
+            or (
+                "wristCommandEnabled" in data
+                and data["wristCommandEnabled"] is not True
+            )
         ):
             return
 
@@ -120,18 +133,24 @@ class WebRtcInputPublisher(Node):
         self._hand_target_publisher.publish(message)
 
     def _publish_hand_target_active(self, data: dict[str, Any]) -> None:
-        if not data.get("wristAvailable"):
+        if data.get("wristAvailable") is not True:
             return
 
         message = Bool()
-        command_enabled = data.get("wristCommandEnabled")
-        message.data = (
-            True if command_enabled is None else bool(command_enabled)
-        )
+        if "wristCommandEnabled" not in data:
+            # Compatibility with the original Unity/browser payload schema.
+            message.data = True
+        elif not isinstance(data["wristCommandEnabled"], bool):
+            self.get_logger().warning(
+                "Ignoring non-boolean wrist command gate"
+            )
+            message.data = False
+        else:
+            message.data = data["wristCommandEnabled"]
         self._hand_target_active_publisher.publish(message)
 
     def _publish_gripper_target(self, data: dict[str, Any]) -> None:
-        if not data.get("gripperAvailable"):
+        if data.get("gripperAvailable") is not True:
             return
 
         try:
@@ -169,6 +188,12 @@ class WebRtcInputPublisher(Node):
         except (KeyError, TypeError, ValueError):
             self.get_logger().warning(
                 f"Input payload had no valid {warning_context} position"
+            )
+            return None
+
+        if not all(math.isfinite(value) for value in position.values()):
+            self.get_logger().warning(
+                f"Ignoring non-finite {warning_context} position"
             )
             return None
 
@@ -214,15 +239,33 @@ class WebRtcInputPublisher(Node):
             )
             return None
 
-        norm_squared = sum(value * value for value in quaternion.values())
-        if norm_squared < 1e-6:
+        if not all(math.isfinite(value) for value in quaternion.values()):
+            self.get_logger().warning(
+                f"Ignoring non-finite {warning_context} quaternion"
+            )
+            return None
+
+        scale = max(abs(value) for value in quaternion.values())
+        if scale == 0.0:
             self.get_logger().warning(
                 f"Ignoring zero-length {warning_context} quaternion"
             )
             return None
 
-        norm = norm_squared ** 0.5
+        scaled = {
+            axis: value / scale
+            for axis, value in quaternion.items()
+        }
+        scaled_norm = math.sqrt(
+            sum(value * value for value in scaled.values())
+        )
+        if scale < 1e-3 and (scale * scaled_norm) < 1e-3:
+            self.get_logger().warning(
+                f"Ignoring zero-length {warning_context} quaternion"
+            )
+            return None
+
         for axis in quaternion:
-            quaternion[axis] /= norm
+            quaternion[axis] = scaled[axis] / scaled_norm
 
         return quaternion

@@ -22,3 +22,11 @@ dataset recorder. It is an implementation specification, not a description of
 currently deployed behavior.
 
 Start with `data-recording/README.md`.
+
+## Engineering Audit and Roadmap
+
+`audit-2026-06-28/` contains a code, safety, test, recording, and portfolio
+review with a prioritized implementation backlog. It distinguishes verified
+software behavior from recommendations that still require robot testing.
+
+Start with `audit-2026-06-28/README.md`.

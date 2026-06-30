@@ -2,7 +2,7 @@
 
 <h1>Vive Teleop</h1>
 
-<h3>Real-time VR teleoperation for the TIAGo mobile manipulator</h3>
+<h3>VR teleoperation for the TIAGo mobile manipulator</h3>
 
 <p>Look through the robot's camera, guide its seven-axis arm with a Vive controller,<br>
 and move its head simply by looking around.</p>
@@ -75,7 +75,7 @@ flowchart LR
     S -->|7-joint arm trajectory| R
     R -->|camera + live robot state| W
     R -->|joint state + TF| T
-    W -->|low-latency video| U
+    W -->|live video| U
 
     classDef human fill:#6C63FF,color:#fff,stroke:#4B44C4
     classDef client fill:#00A8A8,color:#fff,stroke:#007878
@@ -95,10 +95,9 @@ messages; MoveIt Servo resolves wrist motion through all seven arm joints.
 stateDiagram-v2
     [*] --> Idle
     Idle --> Anchored: deadman pressed
-    Anchored --> Tracking: robot and controller state are fresh
+    Anchored --> Tracking: wrist TF and controller pose are available
     Tracking --> Tracking: newest 6-DoF target replaces the last
     Tracking --> Halted: deadman released or input times out
-    Anchored --> Halted: state becomes stale
     Halted --> Idle: target cleared and zero-twist commands sent
 ```
 
@@ -108,7 +107,7 @@ moment, allowing the operator to keep looking around without steering the arm.
 
 ## Engineering highlights
 
-- Bidirectional WebRTC: low-latency robot video in one direction and VR input in
+- Bidirectional WebRTC: live robot video in one direction and VR input in
   the other, with a TURN relay for the field-network setup.
 - Clutch-relative 6-DoF control: controller translation and rotation are mapped
   from a fresh robot pose rather than an old absolute target.
@@ -116,8 +115,16 @@ moment, allowing the operator to keep looking around without steering the arm.
   joint-limit scaling, singularity scaling, smoothing, and immediate target clear.
 - Independent head, arm, and gripper paths: each control can stay responsive
   without coupling unrelated operator movement.
-- Reproducible deployment: Dockerized ROS 2 services, automated runtime checks,
+- Containerized deployment: Dockerized ROS 2 services, automated runtime checks,
   timestamped logs, and a browser client for debugging without VR hardware.
+
+## Safety scope
+
+This is a supervised research prototype, not a safety-certified robot-control
+product. The current experimental Servo profile disables collision checking and
+must be used only with the lab's physical emergency-stop and operating
+procedure. Signaling and command ingress also assume a trusted, isolated
+network; do not expose them directly to the internet.
 
 ## Explore the implementation
 
@@ -127,3 +134,5 @@ moment, allowing the operator to keep looking around without steering the arm.
   communication, and class-level views with PlantUML sources.
 - [Project documentation](docs/README.md) — documentation index and future dataset
   recording design.
+- [Engineering audit](docs/audit-2026-06-28/README.md) — prioritized safety,
+  testing, recording, and portfolio roadmap plus the low-risk fix report.

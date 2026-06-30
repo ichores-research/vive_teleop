@@ -1,0 +1,9 @@
+# Keep vendored SDK code from dominating GitHub's language statistics and
+# review diffs. The files remain versioned until dependency cleanup is tested
+# in Unity.
+unity-vr-headset/Assets/SteamVR/** linguist-vendored
+
+# Treat demo media and generated architecture renders as binary assets.
+*.gif binary
+*.mp4 binary
+*.png binary

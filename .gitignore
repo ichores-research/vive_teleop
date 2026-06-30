@@ -27,12 +27,6 @@ unity-vr-headset/*.pdb
 unity-vr-headset/*.opendb
 
 # =========================
-# Unity packages cache (optional but safe)
-# =========================
-
-unity-vr-headset/Packages/packages-lock.json
-
-# =========================
 # OS junk
 # =========================
 
@@ -57,7 +51,15 @@ desktop.ini
 *.exe
 *.app
 *.unitypackage
-.*
+
+# Local environment and tool state. Do not ignore every dotfile: repository
+# configuration such as .github workflows and .dockerignore must be trackable.
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.agents/
 
 # =========================
 # Crash / logs
@@ -78,3 +80,9 @@ __pycache__/
 
 # Local controller telemetry
 recordings/*.jsonl
+
+# Local crash and editor recovery artifacts
+unity-vr-headset/mono_crash.*
+unity-vr-headset/UpgradeLog.htm
+unity-vr-headset/Assets/AutosavedBeforeTeleop.unity
+unity-vr-headset/Assets/AutosavedBeforeTeleop.unity.meta

@@ -52,6 +52,28 @@ def _transform_pose(transform: Any) -> dict[str, dict[str, float]]:
     }
 
 
+def _transform_is_valid(transform: Any) -> bool:
+    translation = transform.transform.translation
+    rotation = transform.transform.rotation
+    translation_values = (translation.x, translation.y, translation.z)
+    rotation_values = (rotation.x, rotation.y, rotation.z, rotation.w)
+    if not all(
+        math.isfinite(float(value))
+        for value in (*translation_values, *rotation_values)
+    ):
+        return False
+
+    scale = max(abs(float(value)) for value in rotation_values)
+    if scale == 0.0 or scale > 2.0:
+        return False
+
+    scaled_norm = math.sqrt(
+        sum((float(value) / scale) ** 2 for value in rotation_values)
+    )
+    norm = scale * scaled_norm
+    return 0.99 <= norm <= 1.01
+
+
 class RobotInputState(Node):
     def __init__(self) -> None:
         super().__init__("robot_input_state")
@@ -112,6 +134,7 @@ class RobotInputState(Node):
 
         self._joint_positions: dict[str, float] = {}
         self._last_joint_state_sec = 0.0
+        self._last_invalid_joint_warning_sec = 0.0
         self._joint_lock = threading.Lock()
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -129,10 +152,29 @@ class RobotInputState(Node):
         )
 
     def _on_joint_state(self, message: JointState) -> None:
+        valid_positions: dict[str, float] = {}
+        invalid_count = 0
+        for name, position in zip(message.name, message.position):
+            numeric_position = float(position)
+            if math.isfinite(numeric_position):
+                valid_positions[name] = numeric_position
+            else:
+                invalid_count += 1
+
+        now_sec = self.get_clock().now().nanoseconds / 1e9
         with self._joint_lock:
-            for name, position in zip(message.name, message.position):
-                self._joint_positions[name] = float(position)
-            self._last_joint_state_sec = self.get_clock().now().nanoseconds / 1e9
+            self._joint_positions.update(valid_positions)
+            if valid_positions:
+                self._last_joint_state_sec = now_sec
+
+        if (
+            invalid_count
+            and now_sec - self._last_invalid_joint_warning_sec >= 2.0
+        ):
+            self._last_invalid_joint_warning_sec = now_sec
+            self.get_logger().warning(
+                f"Discarded {invalid_count} non-finite joint position(s)"
+            )
 
     def get_snapshot(self) -> dict[str, Any]:
         errors: list[str] = []
@@ -159,6 +201,10 @@ class RobotInputState(Node):
                 "Gripper joint state is unavailable for "
                 f"'{self._gripper_left_joint}' and "
                 f"'{self._gripper_right_joint}'"
+            )
+        elif joint_state_age_sec > self._max_state_age_sec:
+            errors.append(
+                f"Gripper joint state is stale ({joint_state_age_sec:.2f}s old)"
             )
 
         hand_transform = self._lookup_transform(self._hand_frame, errors)
@@ -238,6 +284,18 @@ class RobotInputState(Node):
                 errors.append(
                     f"Transform '{self._reference_frame}' -> '{source_frame}' "
                     f"is stale ({age_sec:.2f}s old)"
+                )
+                return None
+            if stamp_sec > 0.0 and age_sec < -self._max_state_age_sec:
+                errors.append(
+                    f"Transform '{self._reference_frame}' -> '{source_frame}' "
+                    f"is future-skewed ({-age_sec:.2f}s ahead)"
+                )
+                return None
+            if not _transform_is_valid(transform):
+                errors.append(
+                    f"Transform '{self._reference_frame}' -> '{source_frame}' "
+                    "contains a non-finite value or zero-length quaternion"
                 )
                 return None
             return transform

@@ -4,7 +4,10 @@ import pytest
 from geometry_msgs.msg import PoseStamped, Quaternion
 from std_msgs.msg import Bool
 
-from vive_moveit_server.arm_movement import ArmMovementMixin
+from vive_moveit_server.arm_movement import (
+    ArmMovementMixin,
+    _normalize_quaternion,
+)
 
 
 class _Publisher:
@@ -56,6 +59,22 @@ def test_hand_position_scale_changes_displacement_per_axis() -> None:
         target.pose.position.y,
         target.pose.position.z,
     ) == pytest.approx((0.2, -0.1, -0.3))
+
+
+def test_non_finite_quaternion_is_rejected() -> None:
+    assert _normalize_quaternion(Quaternion(x=math.nan, w=1.0)) is False
+
+
+def test_huge_finite_quaternion_is_normalized_without_overflow() -> None:
+    quaternion = Quaternion(x=1e308, y=1e308, z=1e308, w=1e308)
+
+    assert _normalize_quaternion(quaternion) is True
+    assert (
+        quaternion.x,
+        quaternion.y,
+        quaternion.z,
+        quaternion.w,
+    ) == pytest.approx((0.5, 0.5, 0.5, 0.5))
 
 
 def test_controller_rotation_delta_is_applied_to_robot_anchor() -> None:

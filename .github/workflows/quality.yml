@@ -1,0 +1,32 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install shell lint
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+
+      - name: Run non-hardware checks
+        run: ./test.sh --static
+
+  ros-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run ROS Python tests in Humble
+        run: ./test.sh

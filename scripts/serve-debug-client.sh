@@ -5,11 +5,20 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
 host_ip="$("$script_dir/detect-webrtc-host-ip.sh")"
 port="${1:-8000}"
+serve_dir="$(mktemp -d "${TMPDIR:-/tmp}/vive-teleop-debug.XXXXXX")"
+
+cleanup() {
+  rm -rf -- "$serve_dir"
+}
+trap cleanup EXIT INT TERM
+
+# Serve only the browser client. Serving the repository root would also expose
+# files such as .git metadata and a local .env to every reachable Wi-Fi client.
+install -m 0644 "$repo_dir/index.html" "$serve_dir/index.html"
 
 printf 'Serving debug client on http://0.0.0.0:%s\n' "$port"
 if [[ -n "$host_ip" ]]; then
   printf 'Open from Wi-Fi clients: http://%s:%s\n' "$host_ip" "$port"
 fi
 
-cd "$repo_dir"
-exec python3 -m http.server "$port" --bind 0.0.0.0
+python3 -m http.server "$port" --bind 0.0.0.0 --directory "$serve_dir"

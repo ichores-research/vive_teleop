@@ -26,9 +26,38 @@ export TURN_USER="${TURN_USER:-dummy}"
 export TURN_PASSWORD="${TURN_PASSWORD:-dummy}"
 export WEBRTC_PUBLIC_TURN_URLS="${WEBRTC_PUBLIC_TURN_URLS:-turn:${WEBRTC_HOST_IP}:3478?transport=udp,turn:${WEBRTC_HOST_IP}:3478?transport=tcp}"
 export WEBRTC_TURN_URLS="${WEBRTC_TURN_URLS:-turn:127.0.0.1:3478?transport=udp,turn:127.0.0.1:3478?transport=tcp}"
-export CYCLONEDDS_HOST_CONFIG="${CYCLONEDDS_HOST_CONFIG:-/tmp/vive_teleop_cyclonedds_${ROS2_DDS_INTERFACE}_host.xml}"
 
-if [[ -e "$CYCLONEDDS_HOST_CONFIG" && ! -f "$CYCLONEDDS_HOST_CONFIG" ]]; then
+case "$ROS2_DDS_ALLOW_MULTICAST" in
+  true|false) ;;
+  *)
+    printf 'ROS2_DDS_ALLOW_MULTICAST must be true or false, got: %s\n' \
+      "$ROS2_DDS_ALLOW_MULTICAST" >&2
+    exit 1
+    ;;
+esac
+
+python3 - "$ROBOT_IP" "$ROS2_DDS_INTERFACE" <<'PY'
+import ipaddress
+import sys
+
+for label, value in zip(("ROBOT_IP", "ROS2_DDS_INTERFACE"), sys.argv[1:]):
+    try:
+        ipaddress.ip_address(value)
+    except ValueError as error:
+        raise SystemExit(f"{label} must be an IP address: {error}") from error
+PY
+
+if [[ -z "${CYCLONEDDS_HOST_CONFIG:-}" ]]; then
+  dds_config_suffix="$(printf '%s' "$ROS2_DDS_INTERFACE" | tr -c '[:alnum:]_.-' '_')"
+  umask 077
+  CYCLONEDDS_HOST_CONFIG="$(
+    mktemp "/tmp/vive_teleop_cyclonedds_${dds_config_suffix}_XXXXXX.xml"
+  )"
+  export CYCLONEDDS_HOST_CONFIG
+fi
+
+if [[ -L "$CYCLONEDDS_HOST_CONFIG" ]] || \
+  [[ -e "$CYCLONEDDS_HOST_CONFIG" && ! -f "$CYCLONEDDS_HOST_CONFIG" ]]; then
   dds_config_suffix="$(printf '%s' "$ROS2_DDS_INTERFACE" | tr -c '[:alnum:]_.-' '_')"
   fallback_config="$(mktemp "/tmp/vive_teleop_cyclonedds_${dds_config_suffix}_XXXXXX.xml")"
   printf 'CycloneDDS config path is not a regular file: %s; using %s\n' \
@@ -43,6 +72,7 @@ elif [[ -f "$CYCLONEDDS_HOST_CONFIG" && ! -w "$CYCLONEDDS_HOST_CONFIG" ]]; then
 fi
 
 mkdir -p "$(dirname -- "$CYCLONEDDS_HOST_CONFIG")"
+umask 077
 
 cat > "$CYCLONEDDS_HOST_CONFIG" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

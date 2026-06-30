@@ -4,8 +4,9 @@
   <version>0.1.0</version>
   <description>ROS 2 MoveIt teleoperation server for Vive WebRTC input.</description>
 
-  <maintainer email="mateuszwatly@gmail.com">you</maintainer>
+  <maintainer email="mateuszwatly@gmail.com">Mateusz Wątły</maintainer>
   <license>Apache-2.0</license>
+  <url type="repository">https://github.com/ichores-research/vive_teleop</url>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
@@ -25,6 +26,8 @@
   <exec_depend>tiago_description</exec_depend>
   <exec_depend>tiago_moveit_config</exec_depend>
   <exec_depend>xacro</exec_depend>
+
+  <test_depend>ament_pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

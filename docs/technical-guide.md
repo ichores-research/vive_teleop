@@ -9,7 +9,7 @@ The Unity VR client is still the intended headset frontend, but `index.html` can
 From the repository root, start Docker, SteamVR, and the built Unity VR client:
 
 ```bash
-cd /home/mateusz/vive_teleop
+cd /path/to/vive_teleop
 ./scripts/start-vive-teleop.sh
 ```
 
@@ -62,7 +62,7 @@ fallback. Set `VIVE_TELEOP_PLAYER` to run a player from another path.
 Terminal 1, start the services in detached mode:
 
 ```bash
-cd /home/mateusz/vive_teleop
+cd /path/to/vive_teleop
 ./scripts/up-wifi-webrtc.sh -d
 ```
 
@@ -75,7 +75,7 @@ steam -applaunch 250820
 Terminal 3, start the built Unity client:
 
 ```bash
-cd /home/mateusz/vive_teleop
+cd /path/to/vive_teleop
 ./scripts/run-unity-vr-linux.sh
 ```
 
@@ -169,7 +169,7 @@ Accepts a WebRTC offer for an input data channel and returns an answer.
 
 String payloads are parsed as JSON. Binary payloads are decoded as UTF-8 before parsing.
 
-Before opening the input data channel, the browser debug client reads `GET /robot_state`. The server takes the wrist pose from TF (`base_footprint` to `arm_tool_link`) and the head and gripper state from `/joint_states`, verifies that they are fresh, then fills the displayed controls. The input stream starts at those live values, interpolates toward edited targets, and sends a `unity_teleop_pose` payload at 20 Hz. Use the wrist XYZ, head Pan/Tilt, and normalized gripper opening controls to make small changes while the stream continues.
+Before opening the input data channel, the browser debug client reads `GET /robot_state`. The server takes the wrist pose from TF (`base_footprint` to `arm_tool_link`) and the head and gripper state from `/joint_states`, verifies that they are fresh, then fills the displayed controls. The input stream starts at those live values, interpolates toward edited targets, and sends a `unity_teleop_pose` payload at 20 Hz. Use the wrist XYZ, head Pan/Tilt, and normalized gripper opening controls to make small changes while the stream continues. Wrist commands remain inactive unless the operator is holding the browser's arm deadman button.
 
 Gripper fields in the JSON payload are:
 
@@ -294,6 +294,12 @@ The browser debug client is the built-in gripper frontend:
 3. Change `Opening`, or use `Open` and `Close`. While input is connected, the target is interpolated and streamed automatically at 20 Hz.
 4. `Send Gripper` sends the current gripper target immediately. `Send All` sends head, wrist, and gripper fields together.
 
+Wrist commands use a separate hold-to-run control. Hold `Hold Arm Deadman` to
+enable them. Pointer or keyboard release, moving focus away from the window,
+hiding the page, a channel error/close, or disconnecting clears the browser's
+active state. A lost channel still relies on the ROS command timeout because it
+can no longer carry a release message.
+
 Connecting input does not intentionally move the gripper. The stream starts from the measured opening, and the server ignores an initial target that is already within `gripper_deadband_m` of the current finger position.
 
 The Unity client initializes its gripper target from `/robot_state` and sends
@@ -341,10 +347,10 @@ Validate those services and the live robot state with:
 The check waits up to 60 seconds by default. Set
 `TELEOP_RUNTIME_WAIT_SECONDS` to change that startup timeout.
 
-In another terminal, serve the debug client:
+In another terminal, serve only the debug-client asset:
 
 ```bash
-python3 -m http.server 8000
+./scripts/serve-debug-client.sh
 ```
 
 Open:
@@ -362,6 +368,11 @@ Start the containers with the Wi-Fi overlay:
 ```bash
 ./scripts/up-wifi-webrtc.sh
 ```
+
+Copy `.env.example` to `.env` to keep stable local network values and replace
+the example TURN credentials before using a network with untrusted clients.
+The Wi-Fi launcher validates DDS IP/boolean values and generates its CycloneDDS
+file at a private, unpredictable temporary path.
 
 If the default route is not the Wi-Fi interface, specify the interface instead of hard-coding the address:
 

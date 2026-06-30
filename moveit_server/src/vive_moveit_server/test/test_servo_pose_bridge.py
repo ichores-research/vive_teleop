@@ -8,6 +8,7 @@ from std_msgs.msg import Bool
 from vive_moveit_server.servo_pose_bridge import (
     ServoPoseBridge,
     _clamp_vector,
+    _normalize_quaternion,
     _pose_feedback,
 )
 
@@ -54,6 +55,10 @@ def test_clamp_vector_limits_magnitude_without_changing_direction() -> None:
 
 def test_non_positive_vector_limit_disables_bridge_clamping() -> None:
     assert _clamp_vector((3.0, 4.0, 0.0), 0.0) == (3.0, 4.0, 0.0)
+
+
+def test_non_finite_quaternion_is_rejected() -> None:
+    assert _normalize_quaternion(Quaternion(y=math.inf, w=1.0)) is False
 
 
 def test_pose_feedback_uses_vector_deadband() -> None:
