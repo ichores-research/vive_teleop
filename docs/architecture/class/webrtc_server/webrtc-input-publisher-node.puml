@@ -1,4 +1,5 @@
 @startuml
+!pragma layout smetana
 title class diagram - WebRtcInputPublisher node
 
 skinparam classAttributeIconSize 0
@@ -10,6 +11,8 @@ class WebRtcInputPublisher <<rclpy.node.Node>> {
   -_hand_target_publisher
   -_hand_target_active_publisher
   -_gripper_target_publisher
+  -_base_command_publisher
+  -_base_active_publisher
   -_last_input_log_sec: float
   -_input_log_interval_sec: float
   +publish_input(payload: str | bytes): void
@@ -19,6 +22,8 @@ class WebRtcInputPublisher <<rclpy.node.Node>> {
   -_publish_hand_target_active(data): void
   -_publish_hand_target(data): void
   -_publish_gripper_target(data): void
+  -_publish_base_input(data): void
+  -_joystick_to_base_velocity(...): tuple
   -_extract_pose(data, position_prefix, quaternion_prefix, frame_id, context): PoseStamped | None
   -_extract_quaternion(data, fields, context): dict | None
 }
@@ -38,9 +43,13 @@ class Float64 {
   +data: float
 }
 
+class TwistStamped
+
 WebRtcInputPublisher --> PoseStamped : publishes /vive/head_pose\n/vive/hand_target_pose
 WebRtcInputPublisher --> Bool : publishes /vive/hand_target_active
 WebRtcInputPublisher --> Float64 : publishes /vive/gripper_opening
+WebRtcInputPublisher --> TwistStamped : publishes /vive/base_command
+WebRtcInputPublisher --> Bool : publishes /vive/base_active
 
 note right of WebRtcInputPublisher
   Current implementation routes by availability flags.

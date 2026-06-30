@@ -26,6 +26,7 @@ WebRtcServer --> MoveItServer : /vive/* ROS 2 topics
 Robot --> WebRtcServer : camera, joint states, TF
 Robot --> MoveItServer : joint states, TF, robot model
 MoveItServer --> Robot : head, arm, gripper trajectories
+MoveItServer --> Robot : guarded base Twist on /key_vel
 
 WebRtcServer --> Logs : webrtc_server_wifi.log
 MoveItServer --> Logs : moveit_server_wifi.log
@@ -37,7 +38,8 @@ note bottom of WebRtcServer
 end note
 
 note bottom of MoveItServer
-  Deadman, timeouts, workspace limits, Servo, and trajectory output live here.
+  Deadman, timeouts, workspace limits, base guard, Servo,
+  and controller output live here.
 end note
 
 @enduml

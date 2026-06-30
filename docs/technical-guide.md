@@ -208,6 +208,8 @@ When a payload includes pose fields, `webrtc_server` publishes standard ROS2 mes
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped` using the joystick wrist position and calibrated `robotWristR*` orientation.
 - `/vive/hand_target_active`: `std_msgs/Bool` deadman state, published on every wrist sample so release is immediate rather than inferred only from a timeout.
 - `/vive/gripper_opening`: `std_msgs/Float64` normalized opening, where `0` is closed and `1` is fully open.
+- `/vive/base_active`: `std_msgs/Bool` trackpad/joystick click state.
+- `/vive/base_command`: `geometry_msgs/TwistStamped` differential-drive intent. Joystick Y maps to `linear.x`; negative joystick X maps to positive `angular.z`, so left turns left. A radial deadzone is removed without dividing the pad into directional sectors.
 
 ## MoveIt server
 
@@ -218,6 +220,7 @@ The teleop node is split by responsibility:
 - `vive_moveit_server/vive_moveit_server.py`: node initialization, parameters, ROS clients/publishers, timers, and head/gripper control.
 - `vive_moveit_server/teleop_data.py`: ROS subscriptions for head, hand, gripper, and joint-state input.
 - `vive_moveit_server/arm_movement.py`: deadman clutching, TF wrist anchoring, workspace limits, and Servo pose publication.
+- `vive_moveit_server/base_movement.py`: base deadman edge handling, command timeout, velocity/acceleration limits, and zero-command halting.
 - `vive_moveit_server/servo_pose_bridge.py`: converts absolute 6-DoF Cartesian wrist targets into `TwistStamped` commands for the ROS 2 Humble Servo API. Servo resolves that task through all seven TIAGo arm joints.
 - `launch/servo_runtime.launch.py`: starts MoveIt Servo and the pose bridge using the TIAGo semantic model, kinematics metadata, and joint limits.
 
@@ -238,6 +241,8 @@ Default behavior:
 - Disables the bridge-level linear and angular velocity caps for maximum tracking speed. Servo still applies the loaded per-joint velocity limits, singularity scaling, joint-limit margins, smoothing, and stale-command halting.
 - Runs with Servo collision checking intentionally disabled because its
   proximity scaling is too aggressive for this robot and deployment.
+- Subscribes to `/vive/base_command` and `/vive/base_active`, smooths the planar differential-drive command, and publishes `geometry_msgs/Twist` on PAL's `/key_vel` manual-teleoperation input. The default limits are `0.25 m/s` linear and `0.6 rad/s` angular velocity.
+- Publishes an immediate zero command on trackpad release. A `0.15` second input timeout also halts the base, and motion cannot resume after a timeout until the operator physically releases and presses the trackpad again.
 - Subscribes to normalized commands on `/vive/gripper_opening` and publishes synchronized, velocity-aware finger trajectories to `/gripper_controller/joint_trajectory`.
 - Suppresses the initial gripper command when the requested opening matches the measured robot state, then suppresses duplicate targets within the configured deadband.
 
@@ -260,6 +265,10 @@ Teleop parameters live in `moveit_server/src/vive_moveit_server/config/tiago_sin
 - `gripper_deadband_m`: suppresses repeated targets within `0.0005` m.
 - `gripper_command_duration_sec`: minimum trajectory duration, configured as `0.15` seconds.
 - `gripper_max_velocity_mps`: extends the trajectory duration when required to keep finger motion at or below `0.04` m/s.
+- `base_command_topic`: final TIAGo manual-teleoperation input, configured as `/key_vel`; verify this topic has a subscriber on the live robot.
+- `base_input_timeout_sec` and `base_halt_command_count`: stale-input cutoff and repeated zero-command count, configured as `0.15` seconds and `3`.
+- `base_max_linear_velocity_mps` and `base_max_angular_velocity_radps`: authoritative command limits, configured as `0.25 m/s` and `0.6 rad/s`.
+- `base_max_*_acceleration_*` and `base_max_*_deceleration_*`: per-axis slew limits used while the click remains active. Deadman release and timeout bypass smoothing and stop immediately.
 - `hand_target_timeout_sec`: time without a gated hand target before the deadman is considered released. It is configured as `0.12` seconds.
 - `hand_target_active_topic`: explicit deadman state topic, configured as `/vive/hand_target_active`.
 - `pose_active_topic` and `halt_command_count` in `servo_pose_bridge.yaml`: gate pose acceptance and control how many immediate zero twists are sent when deadman pursuit stops.
@@ -310,7 +319,9 @@ the current latched opening, and the vertical displacement commands an opening
 relative to that anchor. Returning to center latches the result for the next
 swipe. `gripperJoystickDeadzone` suppresses center jitter, while
 `gripperJoystickTravelForFullRange` sets the displacement needed to reach fully
-open or closed.
+open or closed. Clicking the trackpad switches that gesture to base driving;
+gripper input stays suppressed until the click is released and the control
+returns to center.
 
 To disable the bundled TIAGo MoveGroup launch while leaving the Servo runtime enabled:
 
@@ -449,6 +460,12 @@ right trackpad or joystick vertically controls the gripper independently and
 populates `gripperAvailable` and `gripperOpening`; it does not require the wrist
 deadman. Each swipe is relative to the opening latched when the gesture starts.
 Up opens and down closes.
+
+Hold the trackpad or joystick click to drive the base. Push up for forward,
+down for reverse, left for positive-yaw left rotation, and right for right
+rotation. Diagonal positions retain both components, producing a proportional
+forward/reverse arc instead of choosing one of four discrete directions.
+Releasing the click stops the base immediately.
 
 Hold the Vive trigger or side-grip button to command the robot wrist. On every
 press, Unity records the current headset position and yaw and the current

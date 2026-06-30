@@ -28,11 +28,15 @@ Unity sends a `PosePayload` with:
 - HMD availability and quaternion fields.
 - wrist availability, deadman state, raw wrist pose, robot wrist target pose, workspace metadata.
 - joystick trigger/grip/axis state.
+- joystick/trackpad click state used as the base-driving deadman.
 - optional normalized gripper opening.
 
 ## Data Stability Notes
 
 - Unity computes robot wrist targets client-side from calibrated controller deltas.
+- The OpenVR `joystickPrimaryButton` value is the trackpad click, not the
+  application-menu button. Axis motion without a click controls the gripper;
+  clicking suppresses gripper gestures and enables base driving downstream.
 - `wristCommandEnabled` becomes true only when robot wrist state, wrist calibration, and deadman are all active.
 - A resync releases wrist control, reloads `/robot_state`, and recalibrates from the current headset/controller pose.
 - The client accepts a partial `/robot_state` if wrist pose is valid, even when `ready` is false. Keep this intentional behavior documented or make it stricter if gripper/head readiness should also gate input.

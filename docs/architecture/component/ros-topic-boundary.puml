@@ -27,9 +27,12 @@ InputPublisher --> Teleop : /vive/head_pose\nPoseStamped
 InputPublisher --> Teleop : /vive/hand_target_pose\nPoseStamped
 InputPublisher --> Teleop : /vive/hand_target_active\nBool
 InputPublisher --> Teleop : /vive/gripper_opening\nFloat64
+InputPublisher --> Teleop : /vive/base_command\nTwistStamped
+InputPublisher --> Teleop : /vive/base_active\nBool
 
 Teleop --> Controllers : /head_controller/joint_trajectory
 Teleop --> Controllers : /gripper_controller/joint_trajectory
+Teleop --> Controllers : /key_vel\nTwist
 Teleop --> Bridge : /servo_node/pose_target_cmds\n/servo_node/pose_target_active
 Bridge --> Servo : /servo_node/delta_twist_cmds
 Servo --> Controllers : /arm_controller/joint_trajectory

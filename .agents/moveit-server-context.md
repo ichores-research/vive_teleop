@@ -22,6 +22,8 @@
 - `/vive/hand_target_pose`
 - `/vive/hand_target_active`
 - `/vive/gripper_opening`
+- `/vive/base_command`
+- `/vive/base_active`
 - `/joint_states`
 - TF for current wrist pose and robot model.
 
@@ -29,6 +31,7 @@
 
 - `/head_controller/joint_trajectory`
 - `/gripper_controller/joint_trajectory`
+- `/key_vel`
 - `/servo_node/pose_target_cmds`
 - `/servo_node/pose_target_active`
 - `/servo_node/delta_twist_cmds`
@@ -40,6 +43,9 @@
 - Wrist: deadman press anchors current controller pose to current robot wrist TF; only relative controller motion after the press is applied.
 - Servo bridge: computes pose error plus feed-forward target velocity, publishes physical `TwistStamped` speed units.
 - Gripper: normalized opening -> two finger joint positions with deadband and velocity-aware duration.
+- Base: clicked joystick intent -> timeout-gated, velocity/acceleration-limited
+  differential-drive `Twist`; release publishes an immediate zero and timeout
+  recovery requires a fresh physical click edge.
 
 ## Data Stability Notes
 
@@ -47,6 +53,8 @@
 - Deadman release clears target state and publishes repeated halt commands.
 - Workspace constraints clamp wrist target distance and z range before Servo.
 - Head and gripper paths should be kept symmetric with the arm path by adding stale-input and stale-joint-state checks where needed.
+- `/key_vel` is the configurable default manual-teleoperation input for TIAGo.
+  Runtime validation requires a subscriber on the configured output topic.
 - The default Servo profile is tuned for this robot: bridge velocity caps are
   disabled and Servo collision checking is intentionally off because its
   behavior is too aggressive for this deployment. Do not make recorder or QA

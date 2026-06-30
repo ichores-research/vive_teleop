@@ -66,6 +66,9 @@ Expected files:
 ## Data Stability Notes
 
 - `check-teleop-runtime.sh` validates the Servo group, pose active subscriber, halt command count, bridge velocity cap policy, automatic joint-limit scaling, and `/robot_state` readiness.
+- The same runtime check validates base intent subscriptions, the configured
+  `/key_vel` controller subscriber, base velocity limits, timeout, and halt
+  command count.
 - Current runtime checks report the configured collision-checking state but do
   not gate startup on it; disabled checking is intentional for this robot.
 - `coturn/coturn:latest` and `ros:humble` are floating image tags. Pin tags or digests when reproducibility matters.

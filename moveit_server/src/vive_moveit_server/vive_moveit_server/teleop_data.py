@@ -1,6 +1,6 @@
 from typing import Callable
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
@@ -18,11 +18,15 @@ class TeleopDataReceiver:
         hand_target_topic: str,
         hand_target_active_topic: str,
         gripper_input_topic: str,
+        base_input_topic: str,
+        base_active_topic: str,
         joint_state_topic: str,
         on_head_pose: Callable[[PoseStamped], None],
         on_hand_target: Callable[[PoseStamped], None],
         on_hand_target_active: Callable[[Bool], None],
         on_gripper_opening: Callable[[Float64], None],
+        on_base_command: Callable[[TwistStamped], None],
+        on_base_active: Callable[[Bool], None],
         on_joint_state: Callable[[JointState], None],
     ) -> None:
         self._subscriptions = [
@@ -48,6 +52,18 @@ class TeleopDataReceiver:
                 Float64,
                 gripper_input_topic,
                 on_gripper_opening,
+                10,
+            ),
+            node.create_subscription(
+                TwistStamped,
+                base_input_topic,
+                on_base_command,
+                1,
+            ),
+            node.create_subscription(
+                Bool,
+                base_active_topic,
+                on_base_active,
                 10,
             ),
             node.create_subscription(

@@ -12,6 +12,14 @@ unity_project="${repo_dir}/unity-vr-headset"
 unity_player="${unity_project}/Builds/Linux/vive-teleop"
 unity_build_stamp="${unity_player}.build-stamp"
 log_follow_pids=()
+launch_lock="${XDG_RUNTIME_DIR:-/tmp}/vive-teleop-start.lock"
+
+exec 9>"$launch_lock"
+if ! flock --nonblock 9; then
+  printf 'Another vive_teleop launcher is already running (lock: %s).\n' \
+    "$launch_lock" >&2
+  exit 75
+fi
 
 mkdir -p "$run_log_dir"
 exec > >(tee -a "$startup_log") 2>&1
@@ -166,19 +174,26 @@ else
   log "SteamVR is already running"
 fi
 
-log "Waiting for SteamVR server"
+log "Waiting for SteamVR server and compositor"
 for _attempt in $(seq 1 60); do
-  if pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
+  if pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1 &&
+     pgrep -f '/SteamVR/.*/vrcompositor' >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
 
 if ! pgrep -f '/SteamVR/.*/vrserver' >/dev/null 2>&1; then
-  log "SteamVR did not become ready within 60 seconds"
+  log "SteamVR server did not become ready within 60 seconds"
   exit 1
 fi
-log "SteamVR server is ready"
+
+if ! pgrep -f '/SteamVR/.*/vrcompositor' >/dev/null 2>&1; then
+  log "SteamVR compositor did not become ready within 60 seconds"
+  log "Check ~/.local/share/Steam/logs/vrcompositor.txt for direct-display or DRM lease errors"
+  exit 1
+fi
+log "SteamVR server and compositor are ready"
 
 cd "$repo_dir"
 log "Starting Unity player; wrapper log: ${run_log_dir}/unity-wrapper.log"

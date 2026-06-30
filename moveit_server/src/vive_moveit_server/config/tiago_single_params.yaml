@@ -38,6 +38,23 @@ vive_moveit_server:
     # Use at least this duration, extending it to respect the velocity cap.
     gripper_command_duration_sec: 0.15
     gripper_max_velocity_mps: 0.04
+
+    # The WebRTC gateway publishes a continuously mixed differential-drive
+    # command while the controller trackpad/joystick is clicked. PAL's TIAGo
+    # velocity multiplexer accepts manual teleoperation on /key_vel.
+    base_input_topic: /vive/base_command
+    base_active_topic: /vive/base_active
+    base_command_topic: /key_vel
+    base_command_frame: base_footprint
+    base_publish_rate_hz: 30.0
+    base_input_timeout_sec: 0.15
+    base_halt_command_count: 3
+    base_max_linear_velocity_mps: 0.25
+    base_max_angular_velocity_radps: 0.6
+    base_max_linear_acceleration_mps2: 0.5
+    base_max_angular_acceleration_radps2: 1.2
+    base_max_linear_deceleration_mps2: 1.0
+    base_max_angular_deceleration_radps2: 2.4
     joint_state_topic: /joint_states
 
     # The server treats incoming hand target coordinates as this robot frame.

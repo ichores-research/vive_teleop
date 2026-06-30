@@ -28,10 +28,13 @@ A sixth area is designed but not implemented:
    - `/vive/hand_target_pose`
    - `/vive/hand_target_active`
    - `/vive/gripper_opening`
+   - `/vive/base_command`
+   - `/vive/base_active`
 5. `moveit_server` consumes those topics:
    - HMD orientation -> `/head_controller/joint_trajectory`
    - wrist target + deadman -> `/servo_node/pose_target_cmds` and `/servo_node/pose_target_active`
    - normalized gripper opening -> `/gripper_controller/joint_trajectory`
+   - clicked joystick axes -> guarded differential-drive velocity on `/key_vel`
 6. `servo_pose_bridge` converts absolute wrist poses into `TwistStamped` commands for MoveIt Servo.
 7. MoveIt Servo publishes arm trajectories to `/arm_controller/joint_trajectory`.
 
@@ -43,6 +46,9 @@ This project is latency-sensitive and command-data-sensitive. Stable behavior de
 - Pose data must contain finite position values and valid quaternions.
 - Wrist target frames must match the configured planning frame or be transformed explicitly.
 - The deadman signal must be explicit and must immediately halt pursuit when false or stale.
+- Base driving must require the joystick/trackpad click, time out on stale input,
+  publish repeated zero commands when halted, and require a new physical click
+  edge after a timeout.
 - High-rate pose streams should keep only the newest command; old queued commands should not replay.
 - Runtime checks must validate robot state, MoveIt group composition, and Servo command gating before operation.
 

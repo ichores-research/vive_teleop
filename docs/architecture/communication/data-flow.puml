@@ -1,4 +1,5 @@
 @startuml
+!pragma layout smetana
 title vive_teleop brief communication flow
 
 skinparam shadowing false
@@ -36,10 +37,13 @@ Input -> Teleop : /vive/head_pose
 Input -> Teleop : /vive/hand_target_active
 Input -> Teleop : /vive/hand_target_pose
 Input -> Teleop : /vive/gripper_opening
+Input -> Teleop : /vive/base_active
+Input -> Teleop : /vive/base_command
 
 == robot commands ==
 Teleop -> Robot : /head_controller/joint_trajectory
 Teleop -> Robot : /gripper_controller/joint_trajectory
+Teleop -> Robot : guarded /key_vel Twist
 Teleop -> Bridge : /servo_node/pose_target_active
 Teleop -> Bridge : /servo_node/pose_target_cmds
 Bridge -> Robot : read current wrist TF
@@ -51,5 +55,11 @@ Client -> Server : wristCommandEnabled=false or stream stops
 Input -> Teleop : /vive/hand_target_active=false
 Teleop -> Bridge : inactive gate + clear target
 Bridge -> Servo : repeated zero twists
+
+Client -> Server : joystickPrimaryButton=false
+Input -> Teleop : /vive/base_active=false
+Teleop -> Robot : immediate + repeated zero /key_vel
+Server -> Teleop : no more input samples (stream loss)
+Teleop -> Robot : timeout zero /key_vel; require new click edge
 
 @enduml

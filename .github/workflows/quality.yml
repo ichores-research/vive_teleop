@@ -18,6 +18,13 @@ jobs:
       - name: Install shell lint
         run: sudo apt-get update && sudo apt-get install --yes shellcheck
 
+      - name: Ensure demo media is GIF-only
+        run: |
+          if git ls-files | grep -Ei '\.mp4$'; then
+            echo 'MP4 files are not accepted; commit GIF previews instead.' >&2
+            exit 1
+          fi
+
       - name: Run non-hardware checks
         run: ./test.sh --static
 

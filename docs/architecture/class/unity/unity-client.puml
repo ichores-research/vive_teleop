@@ -1,4 +1,5 @@
 @startuml
+!pragma layout smetana
 title class diagram - Unity VR client
 
 skinparam classAttributeIconSize 0
@@ -58,6 +59,9 @@ class PosePayload {
   +robotWristR*: float
   +gripperAvailable: bool
   +gripperOpening: float
+  +joystickAxisX: float
+  +joystickAxisY: float
+  +joystickPrimaryButton: bool
 }
 
 class RobotStateSnapshot {
@@ -94,7 +98,7 @@ ViveTeleopWebRtcClient --> ServerConfig : loads /config
 ViveTeleopWebRtcClient --> RobotStateSnapshot : loads /robot_state
 ViveTeleopWebRtcClient --> PosePayload : sends data-channel JSON
 ViveTeleopWebRtcClient --> WristPose : samples controller
-ViveTeleopWebRtcClient --> JoystickState : deadman + gripper input
+ViveTeleopWebRtcClient --> JoystickState : wrist/gripper/base input
 RobotStateSnapshot *-- RobotWristState
 RobotStateSnapshot *-- RobotGripperState
 

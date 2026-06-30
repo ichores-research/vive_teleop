@@ -94,6 +94,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     ulong openVrTriggerClickActionHandle = OpenVR.k_ulInvalidActionHandle;
     ulong openVrGripActionHandle = OpenVR.k_ulInvalidActionHandle;
     ulong openVrTrackpadActionHandle = OpenVR.k_ulInvalidActionHandle;
+    ulong openVrTrackpadClickActionHandle = OpenVR.k_ulInvalidActionHandle;
     readonly VRActiveActionSet_t[] openVrActiveActionSets =
         new VRActiveActionSet_t[2];
     readonly Dictionary<uint, string> openVrDeviceNames =
@@ -112,6 +113,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     float gripperGestureAnchorOpening;
     float gripperGestureStartAxis;
     bool gripperGestureActive;
+    bool gripperGestureSuppressedUntilCentered;
     ServerConfig activeServerConfig;
 
     public bool IsRecording => recordingActive;
@@ -781,6 +783,22 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         }
 
         var rawAxis = Mathf.Clamp(joystickState.primary2DAxis.y, -1f, 1f);
+        if (joystickState.primaryButton)
+        {
+            gripperGestureActive = false;
+            gripperGestureSuppressedUntilCentered = true;
+            return;
+        }
+
+        if (gripperGestureSuppressedUntilCentered)
+        {
+            if (Mathf.Abs(rawAxis) <= gripperJoystickDeadzone)
+            {
+                gripperGestureSuppressedUntilCentered = false;
+            }
+            return;
+        }
+
         if (Mathf.Abs(rawAxis) <= gripperJoystickDeadzone)
         {
             if (gripperGestureActive)
@@ -1038,6 +1056,12 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             device.TryGetFeatureValue(CommonUsages.trigger, out var trigger);
             device.TryGetFeatureValue(CommonUsages.grip, out var grip);
             device.TryGetFeatureValue(CommonUsages.primaryButton, out var primaryButton);
+            if (device.TryGetFeatureValue(
+                    CommonUsages.primary2DAxisClick,
+                    out var primary2DAxisClicked))
+            {
+                primaryButton = primary2DAxisClicked;
+            }
             device.TryGetFeatureValue(CommonUsages.menuButton, out var menuButton);
             var primary2DAxisTouchSupported =
                 device.TryGetFeatureValue(
@@ -1135,13 +1159,20 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
         var triggerButton = IsOpenVrButtonPressed(
             pressed,
             EVRButtonId.k_EButton_SteamVR_Trigger);
+        var trackpadButton = IsOpenVrButtonPressed(
+            pressed,
+            EVRButtonId.k_EButton_SteamVR_Touchpad);
 
         var primary2DAxis = new Vector2(
             controllerState.rAxis0.x,
             controllerState.rAxis0.y);
         var trigger = Mathf.Clamp01(controllerState.rAxis1.x);
         var grip = gripButton ? 1f : 0f;
-        TryGetOpenVrActionState(ref primary2DAxis, ref trigger, ref grip);
+        TryGetOpenVrActionState(
+            ref primary2DAxis,
+            ref trigger,
+            ref grip,
+            ref trackpadButton);
         if (triggerButton)
         {
             trigger = 1f;
@@ -1159,7 +1190,7 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             primary2DAxis = primary2DAxis,
             trigger = trigger,
             grip = grip,
-            primaryButton = menuButton,
+            primaryButton = trackpadButton,
             menuButton = menuButton,
             primary2DAxisTouchSupported = true,
             primary2DAxisTouched = IsOpenVrButtonPressed(
@@ -1172,7 +1203,8 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     bool TryGetOpenVrActionState(
         ref Vector2 primary2DAxis,
         ref float trigger,
-        ref float grip)
+        ref float grip,
+        ref bool trackpadButton)
     {
         var input = OpenVR.Input;
         if (input == null || !EnsureOpenVrActionHandles(input))
@@ -1247,11 +1279,21 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             grip = 1f;
         }
 
+        var trackpadClick = ReadOpenVrDigitalAction(
+            input,
+            openVrTrackpadClickActionHandle,
+            out var trackpadClickActive);
+        if (trackpadClickActive && trackpadClick)
+        {
+            trackpadButton = true;
+        }
+
         return
             analogError == EVRInputError.None ||
             trackpadError == EVRInputError.None ||
             triggerClickActive ||
-            gripClickActive;
+            gripClickActive ||
+            trackpadClickActive;
     }
 
     bool EnsureOpenVrActionHandles(CVRInput input)
@@ -1287,6 +1329,9 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
             input.GetActionHandle(
                 "/actions/platformer/in/Move",
                 ref openVrTrackpadActionHandle),
+            input.GetActionHandle(
+                "/actions/platformer/in/Jump",
+                ref openVrTrackpadClickActionHandle),
         };
         foreach (var error in errors)
         {

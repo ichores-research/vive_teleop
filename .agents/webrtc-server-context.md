@@ -33,6 +33,9 @@
 - `/vive/hand_target_pose`: `geometry_msgs/PoseStamped`.
 - `/vive/hand_target_active`: `std_msgs/Bool`.
 - `/vive/gripper_opening`: `std_msgs/Float64`, normalized `0.0..1.0`.
+- `/vive/base_command`: `geometry_msgs/TwistStamped`, continuous
+  differential-drive intent from the clicked joystick axes.
+- `/vive/base_active`: `std_msgs/Bool`, strict joystick/trackpad click gate.
 
 ## Data Stability Notes
 
@@ -40,6 +43,9 @@
 - `InputPublisher` currently accepts loose JSON. Any hardening work should start here with a versioned schema, finite-number checks, strict booleans, frame validation, and sequence/timestamp handling.
 - The video path intentionally stores only the latest frame; this is correct for low-latency teleoperation.
 - Multiple input data channels can currently publish to the same ROS topics. Add source/session ownership before allowing multi-operator scenarios.
+- Base mapping uses a radial deadzone and retains both linear and angular
+  components at diagonal joystick angles. Joystick Y maps to linear X and
+  negative joystick X maps to positive angular Z.
 
 ## Future Dataset Recording
 

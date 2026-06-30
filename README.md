@@ -4,8 +4,8 @@
 
 <h3>VR teleoperation for the TIAGo mobile manipulator</h3>
 
-<p>Look through the robot's camera, guide its seven-axis arm with a Vive controller,<br>
-and move its head simply by looking around.</p>
+<p>Look through the robot's camera, drive its base, guide its seven-axis arm,<br>
+and move its head using a Vive headset and controller.</p>
 
 <p>
   <img src="https://img.shields.io/badge/ROS_2-Humble-22314E?style=flat-square&logo=ros" alt="ROS 2 Humble">
@@ -24,12 +24,12 @@ and move its head simply by looking around.</p>
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="arm-teleop-demo.mp4">
+      <a href="docs/assets/arm-teleop-demo.gif">
         <img src="docs/assets/arm-teleop-demo.gif" alt="Operator moving the TIAGo arm with a Vive controller" width="320">
       </a>
     </td>
     <td align="center" width="50%">
-      <a href="head-teleop-demo.mp4">
+      <a href="docs/assets/head-teleop-demo.gif">
         <img src="docs/assets/head-teleop-demo.gif" alt="TIAGo matching the operator's headset movement" width="320">
       </a>
     </td>
@@ -40,7 +40,7 @@ and move its head simply by looking around.</p>
   </tr>
 </table>
 
-<p align="center"><sub>Click either preview to open the full-resolution recording.</sub></p>
+<p align="center"><sub>Click either preview to open the GIF at full size.</sub></p>
 
 ## The project
 
@@ -53,7 +53,8 @@ panel interrupting the task.
 | --- | --- |
 | Turn or tilt the headset | Pan or tilt the robot head |
 | Move the right controller while holding the deadman | Move and rotate the robot wrist |
-| Swipe the controller trackpad or joystick | Open or close the gripper |
+| Swipe the controller trackpad or joystick without clicking | Open or close the gripper |
+| Hold the trackpad/joystick click and push in any direction | Drive and steer the differential base continuously |
 | Release the deadman | Stop arm pursuit and clear the active target |
 
 ## How it works
@@ -65,13 +66,13 @@ flowchart LR
     W["WebRTC gateway"]
     T["ROS 2 teleop control"]
     S["MoveIt Servo"]
-    R["TIAGo<br/>head · arm · gripper · camera"]
+    R["TIAGo<br/>head · arm · gripper · base · camera"]
 
     O -->|head and hand motion| U
-    U -->|pose + deadman + gripper<br/>WebRTC data channel| W
+    U -->|pose + deadman + gripper + base<br/>WebRTC data channel| W
     W -->|typed /vive/* topics| T
     T -->|wrist target| S
-    T -->|head + gripper trajectories| R
+    T -->|head + gripper trajectories<br/>guarded base velocity| R
     S -->|7-joint arm trajectory| R
     R -->|camera + live robot state| W
     R -->|joint state + TF| T
@@ -113,7 +114,7 @@ moment, allowing the operator to keep looking around without steering the arm.
   from a fresh robot pose rather than an old absolute target.
 - Layered motion handling: deadman release, stale-input timeout, workspace bounds,
   joint-limit scaling, singularity scaling, smoothing, and immediate target clear.
-- Independent head, arm, and gripper paths: each control can stay responsive
+- Independent head, arm, gripper, and base paths: each control can stay responsive
   without coupling unrelated operator movement.
 - Containerized deployment: Dockerized ROS 2 services, automated runtime checks,
   timestamped logs, and a browser client for debugging without VR hardware.
@@ -125,6 +126,8 @@ product. The current experimental Servo profile disables collision checking and
 must be used only with the lab's physical emergency-stop and operating
 procedure. Signaling and command ingress also assume a trusted, isolated
 network; do not expose them directly to the internet.
+The base path enforces a deadman, limits, and a timeout, but it does not add an
+obstacle collision monitor; maintain line of sight and clear operating space.
 
 ## Explore the implementation
 

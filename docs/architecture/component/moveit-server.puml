@@ -13,11 +13,14 @@ package "Input topics" {
   queue "/vive/hand_target_pose" as HandTarget
   queue "/vive/hand_target_active" as HandActive
   queue "/vive/gripper_opening" as GripperOpening
+  queue "/vive/base_command" as BaseInput
+  queue "/vive/base_active" as BaseActive
 }
 
 package "moveit_server" {
   component "TeleopDataReceiver" as Receiver
   component "ViveMoveItServer" as Teleop
+  component "BaseMovementMixin" as BaseGuard
   component "ServoPoseBridge" as Bridge
   component "MoveIt Servo" as Servo
   component "move_group" as MoveGroup
@@ -36,13 +39,17 @@ package "Command topics" {
   queue "/servo_node/pose_target_active" as PoseActive
   queue "/servo_node/delta_twist_cmds" as DeltaTwist
   queue "/arm_controller/joint_trajectory" as ArmCommand
+  queue "/key_vel" as BaseCommand
 }
 
 HeadPose --> Receiver
 HandTarget --> Receiver
 HandActive --> Receiver
 GripperOpening --> Receiver
+BaseInput --> Receiver
+BaseActive --> Receiver
 Receiver --> Teleop : callbacks
+Teleop --> BaseGuard : base callbacks + timer
 
 JointStates --> Teleop : head/gripper state
 Tf --> Teleop : wrist anchor
@@ -50,6 +57,7 @@ Teleop --> HeadCommand
 Teleop --> GripperCommand
 Teleop --> PoseTarget
 Teleop --> PoseActive
+BaseGuard --> BaseCommand
 
 PoseTarget --> Bridge
 PoseActive --> Bridge

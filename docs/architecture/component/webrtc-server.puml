@@ -29,6 +29,8 @@ package "Published /vive topics" {
   queue "/vive/hand_target_pose" as HandTarget
   queue "/vive/hand_target_active" as HandActive
   queue "/vive/gripper_opening" as GripperOpening
+  queue "/vive/base_command" as BaseCommand
+  queue "/vive/base_active" as BaseActive
 }
 
 Client --> Server : /config\n/offer\n/input_offer\n/robot_state
@@ -44,6 +46,8 @@ InputPublisher --> HeadPose
 InputPublisher --> HandTarget
 InputPublisher --> HandActive
 InputPublisher --> GripperOpening
+InputPublisher --> BaseCommand
+InputPublisher --> BaseActive
 
 JointStates --> RobotState : head/gripper
 Tf --> RobotState : wrist/head transforms

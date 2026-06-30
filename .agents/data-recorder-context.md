@@ -81,6 +81,8 @@ Operator/gateway intent:
 - `/vive/hand_target_pose`
 - `/vive/hand_target_active`
 - `/vive/gripper_opening`
+- `/vive/base_command`
+- `/vive/base_active`
 
 Robot-space arm command stages:
 
@@ -94,6 +96,7 @@ Direct controller commands:
 
 - `/head_controller/joint_trajectory`
 - `/gripper_controller/joint_trajectory`
+- `/key_vel`
 
 Runtime topic types and QoS must be probed and saved in the session manifest.
 The proposed whitelist is in `docs/data-recording/dataset-contract.md`.
