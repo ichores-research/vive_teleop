@@ -1,0 +1,73 @@
+@startuml
+!pragma layout smetana
+title component - moveit_server communication
+
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Monospace
+skinparam linetype ortho
+
+package "Input topics" {
+  queue "/vive/head_pose" as HeadPose
+  queue "/vive/hand_target_pose" as HandTarget
+  queue "/vive/hand_target_active" as HandActive
+  queue "/vive/gripper_opening" as GripperOpening
+  queue "/vive/base_command" as BaseInput
+  queue "/vive/base_active" as BaseActive
+}
+
+package "moveit_server" {
+  component "TeleopDataReceiver" as Receiver
+  component "ViveMoveItServer" as Teleop
+  component "BaseMovementMixin" as BaseGuard
+  component "ServoPoseBridge" as Bridge
+  component "MoveIt Servo" as Servo
+  component "move_group" as MoveGroup
+  component "robot_state_publisher" as Rsp
+}
+
+package "Robot state" {
+  queue "/joint_states" as JointStates
+  component "TF" as Tf
+}
+
+package "Command topics" {
+  queue "/head_controller/joint_trajectory" as HeadCommand
+  queue "/gripper_controller/joint_trajectory" as GripperCommand
+  queue "/servo_node/pose_target_cmds" as PoseTarget
+  queue "/servo_node/pose_target_active" as PoseActive
+  queue "/servo_node/delta_twist_cmds" as DeltaTwist
+  queue "/arm_controller/joint_trajectory" as ArmCommand
+  queue "/key_vel" as BaseCommand
+}
+
+HeadPose --> Receiver
+HandTarget --> Receiver
+HandActive --> Receiver
+GripperOpening --> Receiver
+BaseInput --> Receiver
+BaseActive --> Receiver
+Receiver --> Teleop : callbacks
+Teleop --> BaseGuard : base callbacks + timer
+
+JointStates --> Teleop : head/gripper state
+Tf --> Teleop : wrist anchor
+Teleop --> HeadCommand
+Teleop --> GripperCommand
+Teleop --> PoseTarget
+Teleop --> PoseActive
+BaseGuard --> BaseCommand
+
+PoseTarget --> Bridge
+PoseActive --> Bridge
+Tf --> Bridge : current wrist
+Bridge --> DeltaTwist
+
+Rsp --> MoveGroup : robot_description + TF
+MoveGroup --> Servo : planning scene/model
+JointStates --> Servo : arm joints
+DeltaTwist --> Servo
+Servo --> ArmCommand
+
+@enduml

@@ -1,13 +1,13 @@
 services:
-  ros2_app:
+  webrtc_server:
     build:
-      context: ./ros2_app
+      context: ./webrtc_server
       network: host
 
-    container_name: ros2_app
+    container_name: webrtc_server
 
     volumes:
-      - ./ros2_app/src/image_listener:/ros2_ws/src/image_listener
+      - ./webrtc_server/src/image_listener:/ros2_ws/src/image_listener
 
     working_dir: /ros2_ws
 
@@ -41,7 +41,7 @@ services:
     container_name: moveit_server
 
     depends_on:
-      - ros2_app
+      - webrtc_server
 
     volumes:
       - ./moveit_server/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro

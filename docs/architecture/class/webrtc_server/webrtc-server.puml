@@ -1,0 +1,59 @@
+@startuml
+title class diagram - WebRTCServer
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+class WebRTCServer {
+  +host: str
+  +port: int
+  -_ice_config: RTCConfiguration
+  -_ice_gathering_timeout: float
+  -_pcs: set[RTCPeerConnection]
+  -_media_relay: MediaRelay
+  -_app: aiohttp.web.Application
+  -_cors
+  -_add_config_routes(): void
+  +add_video_route(path, video_track): void
+  +add_input_route(path, on_message): void
+  +add_json_route(path, callback): void
+  +add_offer_route(path, setup_peer): void
+  +run(loop): void
+  -_handle_offer(request, setup_peer): Response
+  -_handle_config(request): Response
+  -_wait_for_ice_gathering(pc): void
+  -_on_shutdown(app): void
+}
+
+class RTCConfiguration
+class RTCIceServer
+class RTCPeerConnection
+class RTCSessionDescription
+class MediaRelay
+class "aiohttp.web.Application" as AiohttpApp
+
+class "config helpers" as Helpers {
+  +ice_config_from_env(): RTCConfiguration
+  +public_turn_urls_from_env(): list[str]
+  +_ice_server_dict(urls): dict
+  +_candidate_summary(sdp): str
+}
+
+WebRTCServer --> AiohttpApp : owns routes
+WebRTCServer --> MediaRelay : shares video track
+WebRTCServer --> RTCPeerConnection : creates per offer
+WebRTCServer --> RTCSessionDescription : parses offer/answer
+WebRTCServer --> RTCConfiguration : ICE/TURN config
+RTCConfiguration *-- RTCIceServer
+WebRTCServer --> Helpers : ICE and logging helpers
+
+note bottom of WebRTCServer
+  Routes:
+  GET /config and /healthz
+  POST /offer for video
+  POST /input_offer for data channel
+  GET /robot_state is added by teleop_webrtc.py
+end note
+
+@enduml

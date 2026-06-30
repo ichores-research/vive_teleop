@@ -2,7 +2,7 @@ import math
 from typing import Dict, List, Optional
 
 import rclpy
-from geometry_msgs.msg import PoseStamped, Quaternion
+from geometry_msgs.msg import PoseStamped, Quaternion, Twist
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -12,7 +12,9 @@ from std_msgs.msg import Float64
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from .arm_movement import ArmMovementMixin
+from .base_movement import BaseMovementMixin
 from .teleop_data import TeleopDataReceiver
+from .teleop_math import normalize_quaternion as _normalize_quaternion
 
 
 def _vector_parameter(value: object, fallback: list[float]) -> list[float]:
@@ -45,29 +47,11 @@ def _declare_string_list_parameter(
     )
 
 
-def _normalize_quaternion(quaternion: Quaternion) -> bool:
-    norm_squared = (
-        quaternion.x * quaternion.x
-        + quaternion.y * quaternion.y
-        + quaternion.z * quaternion.z
-        + quaternion.w * quaternion.w
-    )
-    if norm_squared < 1e-12:
-        return False
-
-    norm = math.sqrt(norm_squared)
-    quaternion.x /= norm
-    quaternion.y /= norm
-    quaternion.z /= norm
-    quaternion.w /= norm
-    return True
-
-
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-class ViveMoveItServer(ArmMovementMixin, Node):
+class ViveMoveItServer(BaseMovementMixin, ArmMovementMixin, Node):
     """Initialize and compose teleoperation data and movement components."""
 
     def __init__(self) -> None:
@@ -103,6 +87,22 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             "gripper_command_topic",
             "/gripper_controller/joint_trajectory",
         ).value
+        base_input_topic = self.declare_parameter(
+            "base_input_topic",
+            "/vive/base_command",
+        ).value
+        base_active_topic = self.declare_parameter(
+            "base_active_topic",
+            "/vive/base_active",
+        ).value
+        base_command_topic = self.declare_parameter(
+            "base_command_topic",
+            "/key_vel",
+        ).value
+        self.base_command_frame = self.declare_parameter(
+            "base_command_frame",
+            "base_footprint",
+        ).value
         joint_state_topic = self.declare_parameter(
             "joint_state_topic",
             "/joint_states",
@@ -130,6 +130,14 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             "gripper_deadband_m": 0.0005,
             "gripper_command_duration_sec": 0.15,
             "gripper_max_velocity_mps": 0.04,
+            "base_input_timeout_sec": 0.15,
+            "base_publish_rate_hz": 30.0,
+            "base_max_linear_velocity_mps": 0.25,
+            "base_max_angular_velocity_radps": 0.6,
+            "base_max_linear_acceleration_mps2": 0.5,
+            "base_max_angular_acceleration_radps2": 1.2,
+            "base_max_linear_deceleration_mps2": 1.0,
+            "base_max_angular_deceleration_radps2": 2.4,
         }
         for name, default in float_parameters.items():
             setattr(
@@ -191,6 +199,18 @@ class ViveMoveItServer(ArmMovementMixin, Node):
         self.last_hand_target_received_sec = 0.0
         self.last_log_times: Dict[str, float] = {}
         self.hand_target_active = False
+        self.base_active_input = False
+        self.base_command_enabled = False
+        self.pending_base_command: Optional[tuple[float, float]] = None
+        self.base_enabled_received_sec = 0.0
+        self.last_base_command_received_sec = 0.0
+        self.last_base_update_sec = 0.0
+        self.last_base_output_linear = 0.0
+        self.last_base_output_angular = 0.0
+        self.base_halt_commands_remaining = 0
+        self.base_halt_command_count = int(
+            self.declare_parameter("base_halt_command_count", 3).value
+        )
         self.received_head_pose = False
         self.received_hand_target = False
         self.received_joint_state = False
@@ -205,22 +225,33 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             gripper_command_topic,
             10,
         )
+        self.base_velocity_publisher = self.create_publisher(
+            Twist,
+            base_command_topic,
+            10,
+        )
         self.data_receiver = TeleopDataReceiver(
             self,
             head_input_topic=head_input_topic,
             hand_target_topic=hand_target_topic,
             hand_target_active_topic=hand_target_active_topic,
             gripper_input_topic=gripper_input_topic,
+            base_input_topic=base_input_topic,
+            base_active_topic=base_active_topic,
             joint_state_topic=joint_state_topic,
             on_head_pose=self._on_head_pose,
             on_hand_target=self._on_hand_target,
             on_hand_target_active=self._on_hand_target_active,
             on_gripper_opening=self._on_gripper_opening,
+            on_base_command=self._on_base_command,
+            on_base_active=self._on_base_active,
             on_joint_state=self._on_joint_state,
         )
         self.create_timer(0.02, self._maybe_send_latest_target)
         head_timer_period_sec = 1.0 / max(1.0, self.head_publish_rate_hz)
         self.create_timer(head_timer_period_sec, self._maybe_publish_head_command)
+        base_timer_period_sec = 1.0 / max(1.0, self.base_publish_rate_hz)
+        self.create_timer(base_timer_period_sec, self._maybe_publish_base_command)
 
         self.get_logger().info(
             f"Listening for head poses on '{head_input_topic}' and hand targets "
@@ -233,6 +264,10 @@ class ViveMoveItServer(ArmMovementMixin, Node):
         self.get_logger().info(
             f"Gripper opening commands on '{gripper_input_topic}' publish to "
             f"'{gripper_command_topic}'"
+        )
+        self.get_logger().info(
+            f"Guarded base commands on '{base_input_topic}' publish to "
+            f"'{base_command_topic}'"
         )
         self.get_logger().info(
             f"Arm targets use MoveIt Servo group '{self.arm_group}' with "
@@ -258,13 +293,29 @@ class ViveMoveItServer(ArmMovementMixin, Node):
         pan, tilt = pan_tilt
         pan = self._clamp_head_joint(pan, self.head_pan_limits_rad)
         tilt = self._clamp_head_joint(tilt, self.head_tilt_limits_rad)
+        if not all(math.isfinite(value) for value in (pan, tilt)):
+            self._warn_throttled(
+                "non_finite_head_command",
+                "Rejected a non-finite head trajectory command",
+                2.0,
+            )
+            return
         if self._inside_head_deadband(pan, tilt):
+            return
+
+        command_duration_sec = max(0.02, self.head_command_duration_sec)
+        if not math.isfinite(command_duration_sec):
+            self._warn_throttled(
+                "non_finite_head_duration",
+                "Rejected a head trajectory with non-finite duration",
+                2.0,
+            )
             return
 
         point = JointTrajectoryPoint()
         point.positions = [pan, tilt]
         point.time_from_start = Duration(
-            seconds=max(0.02, self.head_command_duration_sec)
+            seconds=command_duration_sec
         ).to_msg()
 
         trajectory = JointTrajectory()
@@ -325,12 +376,17 @@ class ViveMoveItServer(ArmMovementMixin, Node):
         )
 
     def _on_joint_state(self, message: JointState) -> None:
-        if not self.received_joint_state:
+        received_valid_position = False
+        for name, position in zip(message.name, message.position):
+            numeric_position = float(position)
+            if not math.isfinite(numeric_position):
+                continue
+            self.current_joint_positions[name] = numeric_position
+            received_valid_position = True
+
+        if received_valid_position and not self.received_joint_state:
             self.get_logger().info("Received first joint state sample")
             self.received_joint_state = True
-
-        for name, position in zip(message.name, message.position):
-            self.current_joint_positions[name] = float(position)
 
     def _on_gripper_opening(self, message: Float64) -> None:
         if not math.isfinite(float(message.data)):
@@ -372,6 +428,16 @@ class ViveMoveItServer(ArmMovementMixin, Node):
             for joint_name in self.gripper_joint_names
         ]
         current_average = sum(current_positions) / len(current_positions)
+        if not all(
+            math.isfinite(value)
+            for value in (target_position, current_average)
+        ):
+            self._warn_throttled(
+                "non_finite_gripper_command",
+                "Rejected a non-finite gripper trajectory command",
+                2.0,
+            )
+            return
         deadband = max(0.0, self.gripper_deadband_m)
 
         if (
@@ -395,6 +461,13 @@ class ViveMoveItServer(ArmMovementMixin, Node):
                 duration_sec,
                 abs(target_position - current_average) / max_velocity,
             )
+        if not math.isfinite(duration_sec):
+            self._warn_throttled(
+                "non_finite_gripper_duration",
+                "Rejected a gripper trajectory with non-finite duration",
+                2.0,
+            )
+            return
 
         point = JointTrajectoryPoint()
         point.positions = [
@@ -438,6 +511,12 @@ def main(args: Optional[List[str]] = None) -> None:
         if rclpy.ok():
             raise
     finally:
+        if rclpy.ok() and (
+            node.base_active_input
+            or abs(node.last_base_output_linear) > 0.0
+            or abs(node.last_base_output_angular) > 0.0
+        ):
+            node._halt_base_immediately()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

@@ -1,14 +1,14 @@
 services:
-  ros2_app_wifi:
+  webrtc_server_wifi:
     build:
-      context: ./ros2_app
+      context: ./webrtc_server
       network: host
-    container_name: ros2_app_wifi
+    container_name: webrtc_server_wifi
     depends_on:
       - coturn_wifi
     network_mode: host
     volumes:
-      - ./ros2_app/src/image_listener:/ros2_ws/src/image_listener
+      - ./webrtc_server/src/image_listener:/ros2_ws/src/image_listener
       - ${CYCLONEDDS_HOST_CONFIG:?Run scripts/up-wifi-webrtc.sh or set CYCLONEDDS_HOST_CONFIG}:/tmp/cyclonedds.xml:ro
     working_dir: /ros2_ws
     restart: on-failure
@@ -29,7 +29,7 @@ services:
         ros2 run image_listener image_subscriber
       "
 
-  ros2_app:
+  webrtc_server:
     depends_on:
       - coturn_wifi
     environment:
@@ -47,7 +47,7 @@ services:
       network: host
     container_name: moveit_server_wifi
     depends_on:
-      - ros2_app_wifi
+      - webrtc_server_wifi
     network_mode: host
     volumes:
       - ${CYCLONEDDS_HOST_CONFIG:?Run scripts/up-wifi-webrtc.sh or set CYCLONEDDS_HOST_CONFIG}:/tmp/cyclonedds.xml:ro

@@ -1,0 +1,61 @@
+@startuml
+!pragma layout smetana
+title class diagram - WebRtcInputPublisher node
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+class WebRtcInputPublisher <<rclpy.node.Node>> {
+  -_head_pose_publisher
+  -_hand_target_publisher
+  -_hand_target_active_publisher
+  -_gripper_target_publisher
+  -_base_command_publisher
+  -_base_active_publisher
+  -_last_input_log_sec: float
+  -_input_log_interval_sec: float
+  +publish_input(payload: str | bytes): void
+  -_serialize_payload(payload): str
+  -_parse_json_object(payload): dict | None
+  -_publish_head_pose(data): void
+  -_publish_hand_target_active(data): void
+  -_publish_hand_target(data): void
+  -_publish_gripper_target(data): void
+  -_publish_base_input(data): void
+  -_joystick_to_base_velocity(...): tuple
+  -_extract_pose(data, position_prefix, quaternion_prefix, frame_id, context): PoseStamped | None
+  -_extract_quaternion(data, fields, context): dict | None
+}
+
+class PoseStamped {
+  +header.stamp
+  +header.frame_id
+  +pose.position
+  +pose.orientation
+}
+
+class Bool {
+  +data: bool
+}
+
+class Float64 {
+  +data: float
+}
+
+class TwistStamped
+
+WebRtcInputPublisher --> PoseStamped : publishes /vive/head_pose\n/vive/hand_target_pose
+WebRtcInputPublisher --> Bool : publishes /vive/hand_target_active
+WebRtcInputPublisher --> Float64 : publishes /vive/gripper_opening
+WebRtcInputPublisher --> TwistStamped : publishes /vive/base_command
+WebRtcInputPublisher --> Bool : publishes /vive/base_active
+
+note right of WebRtcInputPublisher
+  Current implementation routes by availability flags.
+  This is the right place for schema versioning,
+  finite checks, strict booleans, frame validation,
+  sequence numbers, and source/session ownership.
+end note
+
+@enduml

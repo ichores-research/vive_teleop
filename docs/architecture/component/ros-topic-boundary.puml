@@ -1,0 +1,45 @@
+@startuml
+!pragma layout smetana
+title component - ROS topic boundary
+
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Monospace
+skinparam linetype ortho
+
+component "Clients\nUnity / Browser" as Clients
+component "webrtc_server\nInputPublisher" as InputPublisher
+component "moveit_server\nViveMoveItServer" as Teleop
+component "ServoPoseBridge" as Bridge
+component "MoveIt Servo" as Servo
+component "TIAGo controllers" as Controllers
+component "Robot sensors/state" as Sensors
+
+Clients --> InputPublisher : WebRTC data-channel JSON
+
+Sensors --> InputPublisher : /joint_states + TF\nfor /robot_state
+Sensors --> Teleop : /joint_states + TF
+Sensors --> Servo : /joint_states
+Sensors --> Bridge : TF current wrist
+
+InputPublisher --> Teleop : /vive/head_pose\nPoseStamped
+InputPublisher --> Teleop : /vive/hand_target_pose\nPoseStamped
+InputPublisher --> Teleop : /vive/hand_target_active\nBool
+InputPublisher --> Teleop : /vive/gripper_opening\nFloat64
+InputPublisher --> Teleop : /vive/base_command\nTwistStamped
+InputPublisher --> Teleop : /vive/base_active\nBool
+
+Teleop --> Controllers : /head_controller/joint_trajectory
+Teleop --> Controllers : /gripper_controller/joint_trajectory
+Teleop --> Controllers : /key_vel\nTwist
+Teleop --> Bridge : /servo_node/pose_target_cmds\n/servo_node/pose_target_active
+Bridge --> Servo : /servo_node/delta_twist_cmds
+Servo --> Controllers : /arm_controller/joint_trajectory
+
+note bottom
+  This view shows the narrow ROS contract between the WebRTC gateway
+  and robot command generation without internal implementation detail.
+end note
+
+@enduml

@@ -1,0 +1,89 @@
+@startuml
+!pragma layout smetana
+title class diagram - ViveMoveItServer node
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+class ViveMoveItServer <<rclpy.node.Node>> {
+  +arm_group: str
+  +end_effector_link: str
+  +pose_reference_frame: str
+  +latest_head_pose: PoseStamped | None
+  +pending_hand_target: PoseStamped | None
+  +current_joint_positions: dict[str, float]
+  +hand_target_active: bool
+  +head_trajectory_publisher
+  +gripper_trajectory_publisher
+  +base_velocity_publisher
+  +data_receiver: TeleopDataReceiver
+  -_on_head_pose(message): void
+  -_maybe_publish_head_command(): void
+  -_head_pose_to_pan_tilt(message): tuple | None
+  -_clamp_head_joint(value, limits): float
+  -_inside_head_deadband(pan, tilt): bool
+  -_on_joint_state(message): void
+  -_on_gripper_opening(message): void
+  -_warn_throttled(key, message, period): void
+  -_info_throttled(key, message, period): void
+}
+
+class ArmMovementMixin {
+  +deadman_controller_anchor: PoseStamped | None
+  +deadman_robot_anchor: PoseStamped | None
+  +last_hand_target_received_sec: float
+  -_on_hand_target_active(message): void
+  -_on_hand_target(message): void
+  -_reset_hand_target_pursuit(): void
+  -_maybe_send_latest_target(): void
+  -_capture_robot_anchor_from_tf(): bool
+  -_publish_servo_pose_active(active): void
+  -_servo_twist_mode_ready(): bool
+  -_map_controller_delta_to_robot(controller_pose): PoseStamped
+  -_scale_hand_target(message): PoseStamped
+  -_constrain_hand_target_to_workspace(target): bool
+}
+
+class TeleopDataReceiver {
+  -_subscriptions
+  +__init__(node, topics, callbacks)
+}
+
+class BaseMovementMixin {
+  +base_command_enabled: bool
+  +pending_base_command: tuple | None
+  -_on_base_active(message): void
+  -_on_base_command(message): void
+  -_maybe_publish_base_command(): void
+  -_halt_base_immediately(): void
+  -_publish_base_velocity(linear_x, angular_z): void
+}
+
+class PoseStamped
+class JointState
+class JointTrajectory
+class Bool
+class Float64
+class Twist
+class TwistStamped
+
+ViveMoveItServer --|> ArmMovementMixin
+ViveMoveItServer --|> BaseMovementMixin
+ViveMoveItServer *-- TeleopDataReceiver
+TeleopDataReceiver --> PoseStamped : head + hand callbacks
+TeleopDataReceiver --> Bool : deadman callback
+TeleopDataReceiver --> Float64 : gripper callback
+TeleopDataReceiver --> JointState : joint state callback
+TeleopDataReceiver --> TwistStamped : base command callback
+ViveMoveItServer --> JointTrajectory : head/gripper output
+BaseMovementMixin --> Twist : guarded /key_vel output
+ArmMovementMixin --> PoseStamped : Servo pose target
+ArmMovementMixin --> Bool : Servo active gate
+
+note bottom of ArmMovementMixin
+  Deadman clutch anchors controller pose to current robot wrist TF.
+  Only relative motion after the press is applied.
+end note
+
+@enduml

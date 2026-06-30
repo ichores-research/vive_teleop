@@ -1,0 +1,45 @@
+@startuml
+!pragma layout smetana
+title component overview - project communication
+
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Monospace
+skinparam linetype ortho
+
+actor "Unity VR" as Unity
+actor "Browser debug" as Browser
+
+component "webrtc_server\nWebRTC gateway" as WebRtcServer
+component "moveit_server\nteleop control" as MoveItServer
+component "TIAGo robot\nROS 2 graph" as Robot
+component "coturn\nTURN relay" as Coturn
+database "logs/<timestamp>" as Logs
+
+Unity --> WebRtcServer : HTTP config/signaling\nWebRTC video + input
+Browser --> WebRtcServer : HTTP config/state/signaling\nWebRTC video + input
+Unity .. Coturn : ICE relay
+Browser .. Coturn : ICE relay
+
+WebRtcServer --> MoveItServer : /vive/* ROS 2 topics
+Robot --> WebRtcServer : camera, joint states, TF
+Robot --> MoveItServer : joint states, TF, robot model
+MoveItServer --> Robot : head, arm, gripper trajectories
+MoveItServer --> Robot : guarded base Twist on /key_vel
+
+WebRtcServer --> Logs : webrtc_server_wifi.log
+MoveItServer --> Logs : moveit_server_wifi.log
+Coturn --> Logs : coturn_wifi.log
+Unity --> Logs : unity-player.log
+
+note bottom of WebRtcServer
+  JSON data-channel payloads become typed ROS 2 topics here.
+end note
+
+note bottom of MoveItServer
+  Deadman, timeouts, workspace limits, base guard, Servo,
+  and controller output live here.
+end note
+
+@enduml

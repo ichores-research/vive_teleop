@@ -1,0 +1,65 @@
+@startuml
+!pragma layout smetana
+title vive_teleop brief communication flow
+
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+actor Operator
+participant "Unity or browser" as Client
+participant "WebRTCServer\nwebrtc_server" as Server
+participant "ImageSubscriber\n+ VideoTrack" as Video
+participant "InputPublisher\nwebrtc_server" as Input
+participant "RobotInputState\nwebrtc_server" as Snapshot
+participant "ViveMoveItServer\nmoveit_server" as Teleop
+participant "ServoPoseBridge" as Bridge
+participant "MoveIt Servo" as Servo
+participant "Robot controllers" as Robot
+
+== startup and state ==
+Client -> Server : GET /config
+Client -> Snapshot : GET /robot_state
+Snapshot -> Robot : read /joint_states + TF
+Snapshot --> Client : ready state, wrist pose, head state, gripper opening
+
+== video ==
+Client -> Server : POST /offer
+Server -> Video : attach media track
+Robot -> Video : /head_front_camera/rgb/image_raw
+Video --> Client : WebRTC camera frames
+
+== input ==
+Client -> Server : POST /input_offer
+Operator -> Client : HMD/controller/gripper input
+Client -> Server : data-channel JSON pose payload
+Server -> Input : on_message(payload)
+Input -> Teleop : /vive/head_pose
+Input -> Teleop : /vive/hand_target_active
+Input -> Teleop : /vive/hand_target_pose
+Input -> Teleop : /vive/gripper_opening
+Input -> Teleop : /vive/base_active
+Input -> Teleop : /vive/base_command
+
+== robot commands ==
+Teleop -> Robot : /head_controller/joint_trajectory
+Teleop -> Robot : /gripper_controller/joint_trajectory
+Teleop -> Robot : guarded /key_vel Twist
+Teleop -> Bridge : /servo_node/pose_target_active
+Teleop -> Bridge : /servo_node/pose_target_cmds
+Bridge -> Robot : read current wrist TF
+Bridge -> Servo : /servo_node/delta_twist_cmds
+Servo -> Robot : /arm_controller/joint_trajectory
+
+== halt ==
+Client -> Server : wristCommandEnabled=false or stream stops
+Input -> Teleop : /vive/hand_target_active=false
+Teleop -> Bridge : inactive gate + clear target
+Bridge -> Servo : repeated zero twists
+
+Client -> Server : joystickPrimaryButton=false
+Input -> Teleop : /vive/base_active=false
+Teleop -> Robot : immediate + repeated zero /key_vel
+Server -> Teleop : no more input samples (stream loss)
+Teleop -> Robot : timeout zero /key_vel; require new click edge
+
+@enduml

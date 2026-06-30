@@ -16,10 +16,11 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="you",
+    maintainer="Mateusz Wątły",
     maintainer_email="mateuszwatly@gmail.com",
     description="ROS 2 MoveIt teleoperation server for Vive WebRTC input.",
     license="Apache-2.0",
+    url="https://github.com/ichores-research/vive_teleop",
     entry_points={
         "console_scripts": [
             "vive_moveit_server = vive_moveit_server.vive_moveit_server:main",

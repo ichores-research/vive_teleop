@@ -1,0 +1,110 @@
+@startuml
+!pragma layout smetana
+title class diagram - Unity VR client
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+class ViveTeleopWebRtcClient <<MonoBehaviour>> {
+  +configUrl: string
+  +fallbackServerUrl: string
+  +connectOnStart: bool
+  +poseSendRateHz: float
+  +sendHmdPose: bool
+  +sendJoystickWristPose: bool
+  +requireWristDeadman: bool
+  +controlGripperWithJoystick: bool
+  -videoPeer: RTCPeerConnection
+  -inputPeer: RTCPeerConnection
+  -inputChannel: RTCDataChannel
+  -robotWristStateReady: bool
+  -robotGripperStateReady: bool
+  -wristCalibrationReady: bool
+  -wristCommandActive: bool
+  -robotWristAnchorPosition: Vector3
+  -robotWristAnchorRotation: Quaternion
+  +Connect(): void
+  +Disconnect(): void
+  +SendPose(): void
+  +ResyncTrackingToRobotState(): void
+  -ConnectRoutine(): IEnumerator
+  -LoadServerConfig(onLoaded): IEnumerator
+  -LoadRobotWristState(serverConfig): IEnumerator
+  -ConnectVideo(serverConfig): IEnumerator
+  -ConnectInput(serverConfig): IEnumerator
+  -TryGetHeadsetPose(out position, out rotation): bool
+  -TryGetWristPose(out wristPose, out joystickState): bool
+  -TryCaptureWristWorkspaceAnchor(...): bool
+  -UpdateGripperCommand(joystickState): void
+}
+
+class ServerConfig {
+  +serverUrl: string
+  +offerUrl: string
+  +inputOfferUrl: string
+  +iceServers: IceServerConfig[]
+  +VideoOfferUrl: string
+  +InputOfferUrl: string
+}
+
+class PosePayload {
+  +type: string
+  +timestamp: float
+  +hmdAvailable: bool
+  +wristAvailable: bool
+  +wristCommandEnabled: bool
+  +robotWristFrame: string
+  +robotWristP*: float
+  +robotWristR*: float
+  +gripperAvailable: bool
+  +gripperOpening: float
+  +joystickAxisX: float
+  +joystickAxisY: float
+  +joystickPrimaryButton: bool
+}
+
+class RobotStateSnapshot {
+  +ready: bool
+  +wrist: RobotWristState
+  +gripper: RobotGripperState
+}
+
+class RobotWristState {
+  +frame: string
+  +position: JsonVector3
+  +orientation: JsonQuaternion
+}
+
+class RobotGripperState {
+  +opening: float
+}
+
+class WristPose {
+  +source: string
+  +position: Vector3
+  +rotation: Quaternion
+}
+
+class JoystickState {
+  +primary2DAxis: Vector2
+  +trigger: float
+  +grip: float
+  +primaryButton: bool
+  +menuButton: bool
+}
+
+ViveTeleopWebRtcClient --> ServerConfig : loads /config
+ViveTeleopWebRtcClient --> RobotStateSnapshot : loads /robot_state
+ViveTeleopWebRtcClient --> PosePayload : sends data-channel JSON
+ViveTeleopWebRtcClient --> WristPose : samples controller
+ViveTeleopWebRtcClient --> JoystickState : wrist/gripper/base input
+RobotStateSnapshot *-- RobotWristState
+RobotStateSnapshot *-- RobotGripperState
+
+note bottom of ViveTeleopWebRtcClient
+  Client computes robot wrist target from calibrated relative controller motion.
+  Python side consumes only the JSON payload, not Unity objects.
+end note
+
+@enduml

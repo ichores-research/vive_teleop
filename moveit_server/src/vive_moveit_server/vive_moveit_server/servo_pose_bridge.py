@@ -11,23 +11,7 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
-
-def _normalize_quaternion(quaternion: Quaternion) -> bool:
-    norm_squared = (
-        quaternion.x * quaternion.x
-        + quaternion.y * quaternion.y
-        + quaternion.z * quaternion.z
-        + quaternion.w * quaternion.w
-    )
-    if norm_squared < 1e-12:
-        return False
-
-    norm = math.sqrt(norm_squared)
-    quaternion.x /= norm
-    quaternion.y /= norm
-    quaternion.z /= norm
-    quaternion.w /= norm
-    return True
+from .teleop_math import normalize_quaternion as _normalize_quaternion
 
 
 def _inverse_quaternion(quaternion: Quaternion) -> Quaternion:
@@ -286,6 +270,18 @@ class ServoPoseBridge(Node):
             )
             return
 
+        position = message.pose.position
+        if not all(
+            math.isfinite(value)
+            for value in (position.x, position.y, position.z)
+        ):
+            self._warn_throttled(
+                "pose_position",
+                "Ignoring Servo pose with non-finite position",
+                2.0,
+            )
+            return
+
         target = _copy_pose(message)
         if not _normalize_quaternion(target.pose.orientation):
             self._warn_throttled(
@@ -331,6 +327,21 @@ class ServoPoseBridge(Node):
             return
 
         current_orientation = transform.transform.rotation
+        current_translation = transform.transform.translation
+        if not all(
+            math.isfinite(value)
+            for value in (
+                current_translation.x,
+                current_translation.y,
+                current_translation.z,
+            )
+        ):
+            self._warn_throttled(
+                "wrist_translation",
+                "Ignoring wrist TF with non-finite translation",
+                2.0,
+            )
+            return
         if not _normalize_quaternion(current_orientation):
             self._warn_throttled(
                 "wrist_quaternion",
@@ -390,6 +401,18 @@ class ServoPoseBridge(Node):
             angular_command,
             self.max_angular_velocity_radps,
         )
+        if not all(
+            math.isfinite(value)
+            for value in (*linear_command, *angular_command)
+        ):
+            self._clear_target_state()
+            self._publish_halt_commands()
+            self._warn_throttled(
+                "non_finite_command",
+                "Rejected a non-finite Servo twist command and halted",
+                2.0,
+            )
+            return
 
         command = TwistStamped()
         command.header.stamp = self.get_clock().now().to_msg()

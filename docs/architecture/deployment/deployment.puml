@@ -1,0 +1,67 @@
+@startuml
+!pragma layout smetana
+title vive_teleop deployment
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Monospace
+
+node "Operator workstation" as Host {
+  artifact "Unity Linux player\nunity-vr-headset/Builds/Linux/vive-teleop" as UnityPlayer
+  artifact "Browser debug client\nindex.html" as Browser
+  artifact "Startup scripts\nscripts/*.sh" as Scripts
+  folder "logs/<timestamp>/" as Logs
+}
+
+node "Docker / host-network runtime" as Docker {
+  node "webrtc_server_wifi\nport 8088" as WebRtcServer
+  node "moveit_server_wifi" as MoveItServer
+  node "coturn_wifi\nUDP/TCP 3478" as Coturn
+  artifact "/tmp/cyclonedds.xml" as CycloneConfig
+}
+
+node "Robot network" as RobotNetwork {
+  node "TIAGo robot\n10.68.0.1\nROS_DOMAIN_ID=67" as Robot {
+    queue "/head_front_camera/rgb/image_raw" as Camera
+    queue "/joint_states" as JointStates
+    component "TF tree" as TfTree
+    queue "/head_controller/joint_trajectory" as HeadController
+    queue "/arm_controller/joint_trajectory" as ArmController
+    queue "/gripper_controller/joint_trajectory" as GripperController
+  }
+}
+
+Scripts --> Docker : docker compose up --build
+Scripts --> UnityPlayer : build/run
+Scripts --> Logs : startup + validation logs
+UnityPlayer --> Logs : unity-player.log
+WebRtcServer --> Logs : webrtc_server_wifi.log
+MoveItServer --> Logs : moveit_server_wifi.log
+Coturn --> Logs : coturn_wifi.log
+
+UnityPlayer --> WebRtcServer : HTTP/WebRTC\n/config /offer /input_offer\nport 8088
+Browser --> WebRtcServer : HTTP/WebRTC\n/config /robot_state /offer /input_offer
+UnityPlayer .. Coturn : ICE TURN candidates
+Browser .. Coturn : ICE TURN candidates
+
+WebRtcServer --> Robot : ROS 2 DDS\ncamera, joint states, TF
+MoveItServer --> Robot : ROS 2 DDS\njoint states, TF, controllers
+CycloneConfig --> WebRtcServer : discovery peer + interface
+CycloneConfig --> MoveItServer : discovery peer + interface
+
+Camera --> WebRtcServer : image frames
+JointStates --> WebRtcServer : head/gripper state
+TfTree --> WebRtcServer : wrist/head snapshot TF
+JointStates --> MoveItServer : robot state
+TfTree --> MoveItServer : wrist anchor/current pose
+MoveItServer --> HeadController : head trajectory
+MoveItServer --> ArmController : Servo output trajectory
+MoveItServer --> GripperController : gripper trajectory
+
+note bottom of Docker
+  Wi-Fi mode uses host networking.
+  Field mode uses docker-compose.yml ipvlan addresses:
+  webrtc_server=10.68.0.132, coturn=10.68.0.133, moveit_server=10.68.0.134.
+end note
+
+@enduml

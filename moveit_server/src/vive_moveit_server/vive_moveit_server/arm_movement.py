@@ -7,6 +7,8 @@ from rclpy.time import Time
 from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from .teleop_math import normalize_quaternion as _normalize_quaternion
+
 try:
     from moveit_msgs.srv import ServoCommandType
 except ImportError:
@@ -16,24 +18,6 @@ except ImportError:
 SERVO_POSE_TOPIC = "/servo_node/pose_target_cmds"
 SERVO_POSE_ACTIVE_TOPIC = "/servo_node/pose_target_active"
 SERVO_SWITCH_COMMAND_TYPE_SERVICE = "/servo_node/switch_command_type"
-
-
-def _normalize_quaternion(quaternion: Quaternion) -> bool:
-    norm_squared = (
-        quaternion.x * quaternion.x
-        + quaternion.y * quaternion.y
-        + quaternion.z * quaternion.z
-        + quaternion.w * quaternion.w
-    )
-    if norm_squared < 1e-12:
-        return False
-
-    norm = math.sqrt(norm_squared)
-    quaternion.x /= norm
-    quaternion.y /= norm
-    quaternion.z /= norm
-    quaternion.w /= norm
-    return True
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -122,6 +106,18 @@ class ArmMovementMixin:
             self._publish_servo_pose_active(False)
 
     def _on_hand_target(self, message: PoseStamped) -> None:
+        position = message.pose.position
+        if not all(
+            math.isfinite(value)
+            for value in (position.x, position.y, position.z)
+        ):
+            self._warn_throttled(
+                "hand_input_non_finite",
+                "Ignoring hand target with non-finite position",
+                2.0,
+            )
+            return
+
         if not self.hand_target_active:
             self._publish_servo_pose_active(True)
             controller_anchor = self._scale_hand_target(message)
@@ -239,6 +235,20 @@ class ArmMovementMixin:
         current_pose.pose.position.y = transform.transform.translation.y
         current_pose.pose.position.z = transform.transform.translation.z
         current_pose.pose.orientation = transform.transform.rotation
+        if not all(
+            math.isfinite(value)
+            for value in (
+                current_pose.pose.position.x,
+                current_pose.pose.position.y,
+                current_pose.pose.position.z,
+            )
+        ):
+            self._warn_throttled(
+                "servo_tf_position",
+                "TF returned a non-finite wrist position",
+                2.0,
+            )
+            return False
         if not _normalize_quaternion(current_pose.pose.orientation):
             self._warn_throttled(
                 "servo_tf_quaternion",
