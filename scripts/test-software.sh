@@ -12,7 +12,8 @@ Usage: ./scripts/test-software.sh [--all|--static|--ros|--unity]
   --all     Run static checks, ROS tests, and compile the Unity Linux player.
             This is the default.
   --static  Run non-hardware static checks only.
-  --ros     Run static checks and ROS Python tests.
+  --ros     Run static checks, build the complete Compose stack, and run ROS
+            Python tests.
   --unity   Run static checks and compile the Unity Linux player.
 EOF
 }
@@ -52,6 +53,19 @@ esac
 "$script_dir/check-static.sh"
 
 if [[ "$run_ros" == "true" ]]; then
+  env \
+    CYCLONEDDS_HOST_CONFIG=/tmp/vive-teleop-ci-cyclonedds.xml \
+    WEBRTC_TURN_URLS='turn:127.0.0.1:3478?transport=udp' \
+    WEBRTC_HOST_IP=192.0.2.10 \
+    WEBRTC_PUBLIC_TURN_URLS='turn:192.0.2.10:3478?transport=udp' \
+    ROS_FIELD_HOST_IP=192.0.2.20 \
+    docker compose \
+      -f "$repo_dir/docker-compose.yml" \
+      -f "$repo_dir/docker-compose.wifi.yml" \
+      build
+
+  printf '%s\n' 'Docker Compose images built successfully.'
+
   docker run --rm --entrypoint bash \
     -v "$repo_dir:/workspace:ro" \
     -w /workspace \

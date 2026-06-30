@@ -539,6 +539,8 @@ Run every software check, including ROS tests and a Unity Linux compilation:
 ```
 
 Individual test modes are available as `--static`, `--ros`, and `--unity`.
+The ROS mode builds every buildable service in the default and Wi-Fi Compose
+configuration before running the Python tests; it does not start containers.
 The Unity mode uses the editor version declared in
 `ProjectSettings/ProjectVersion.txt`, or the `UNITY_EDITOR` override.
 
