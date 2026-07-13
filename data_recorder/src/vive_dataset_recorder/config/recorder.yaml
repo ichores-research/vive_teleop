@@ -1,0 +1,57 @@
+vive_dataset_recorder:
+  ros__parameters:
+    recording_mode: deadman_window
+    capture_gate_topic: /vive/hand_target_active
+    camera_topic: /head_front_camera/rgb/image_raw
+    frame_state_topic: /teleop/recording/deadman_frame_state
+    event_topic: /teleop/recording/events
+    status_topic: /teleop/recording/status
+    output_root: /recordings
+    storage_id: mcap
+    storage_config_uri: /recorder_ws/install/vive_dataset_recorder/share/vive_dataset_recorder/config/mcap-writer-options.yaml
+    post_roll_sec: 0.75
+    capture_gate_stale_timeout_sec: 0.25
+    bootstrap_timeout_sec: 30.0
+    minimum_free_space_bytes: 20000000000
+    max_cache_size_bytes: 104857600
+    max_bag_size_bytes: 0
+    max_bag_duration_sec: 0
+
+    # Compact manipulation dataset: what the head camera sees, measured robot
+    # motion, effective robot commands, and deadman labels. It deliberately
+    # excludes all other sensors, audio, HRI/rosbridge/UI, joystick topics,
+    # navigation-goal inputs, and every /vive topic except deadman.
+    record_topics:
+      # Visual observation from the head-mounted RGB camera.
+      - /head_front_camera/rgb/image_raw
+      - /head_front_camera/rgb/camera_info
+
+      # Measured robot motion and the transforms needed to reconstruct poses.
+      - /joint_states
+      - /tf
+      - /tf_static
+      - /mobile_base_controller/odom
+
+      # Controller feedback and effective robot commands.
+      - /arm_controller/controller_state
+      - /head_controller/controller_state
+      - /gripper_controller/controller_state
+      - /torso_controller/controller_state
+      - /servo_node/pose_target_active
+      - /servo_node/pose_target_cmds
+      - /servo_node/delta_twist_cmds
+      - /servo_node/status
+      - /arm_controller/joint_trajectory
+      - /head_controller/joint_trajectory
+      - /gripper_controller/joint_trajectory
+      - /torso_controller/joint_trajectory
+      - /head_controller/safe_command
+      - /torso_controller/safe_command
+      - /key_vel
+      - /mobile_base_controller/cmd_vel
+      - /mobile_base_controller/cmd_vel_out
+
+      # The only operator-input topic retained in the bag.
+      - /vive/hand_target_active
+      - /teleop/recording/deadman_frame_state
+      - /teleop/recording/events

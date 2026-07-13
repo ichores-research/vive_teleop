@@ -118,6 +118,25 @@ moment, allowing the operator to keep looking around without steering the arm.
   without coupling unrelated operator movement.
 - Containerized deployment: Dockerized ROS 2 services, automated runtime checks,
   timestamped logs, and a browser client for debugging without VR hardware.
+- Opt-in rosbag2 datasets: MCAP capture records the head RGB view, robot
+  motion, effective robot commands, and a deadman label for every camera frame.
+  Other operator inputs are rejected by recorder configuration validation.
+
+### Record a dataset
+
+Dataset recording is off by default. Set `VIVE_TELEOP_RECORD_DATASET=1` before
+starting the normal Wi-Fi launcher:
+
+```bash
+VIVE_TELEOP_RECORD_DATASET=1 ./scripts/start-vive-teleop.sh
+```
+
+The default `deadman_window` mode records bootstrap context, each deadman-active
+window, and 0.75 seconds of post-roll. Bags and their `manifest.json` and
+`events.jsonl` indexes are written below `recordings/<session-id>/`. Set
+`VIVE_TELEOP_RECORDING_MODE=continuous_session` when an entire session is
+required. Never replay these bags without isolating or remapping their command
+topics from the live robot ROS domain.
 
 ## Safety scope
 

@@ -78,8 +78,8 @@ unity-vr-headset/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
 __pycache__/
 *.py[cod]
 
-# Local controller telemetry
-recordings/*.jsonl
+# Local controller telemetry and rosbag2 datasets
+recordings/
 
 # Local crash and editor recovery artifacts
 unity-vr-headset/mono_crash.*

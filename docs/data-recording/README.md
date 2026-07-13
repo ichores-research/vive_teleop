@@ -2,8 +2,20 @@
 
 ## Status
 
-Design only. No `data_recorder` service, recorder node, event messages, MCAP
-configuration, or synchronized dataset export is currently implemented.
+The initial online recorder is implemented under `data_recorder/`. It provides
+an embedded Humble rosbag2 recorder, MCAP storage, deadman-window and continuous
+modes, watchdog/post-roll handling, typed events, per-camera-frame deadman
+labels, a manifest/event index, and opt-in Compose integration. The offline
+validator/exporter and live-robot topic/QoS inventory are still pending, so a
+hardware session must be inspected before treating a bag as production-valid.
+
+The implemented privacy boundary is stricter than the earlier provenance
+proposal: `/vive/hand_target_active` is the only operator-input topic allowed in
+the bag. Raw JSON, poses, axes, buttons, head input, gripper input, and base
+input are not recorded. The compact default archive contains only the head RGB
+view/calibration, robot motion, effective robot commands, and recorder labels;
+depth/IR, point clouds, IMU, laser, force, health, power, and statistics are
+excluded.
 
 The existing Unity client can write local JSONL controller samples, but those
 files are not synchronized rosbag datasets and do not contain complete robot

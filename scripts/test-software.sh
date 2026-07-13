@@ -72,6 +72,11 @@ if [[ "$run_ros" == "true" ]]; then
     "$ros_test_image" \
     -lc 'source /opt/ros/humble/setup.bash && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/workspace/moveit_server/src/vive_moveit_server:/workspace/webrtc_server/src/image_listener:$PYTHONPATH python3 -m pytest -p no:cacheprovider -q moveit_server/src/vive_moveit_server/test webrtc_server/src/image_listener/test'
 
+  docker run --rm --entrypoint bash \
+    -v "$repo_dir/data_recorder/src:/recorder_ws/src:ro" \
+    "$ros_test_image" \
+    -lc 'apt-get update >/dev/null && apt-get install -y --no-install-recommends ros-humble-ament-cmake-gtest ros-humble-rosbag2 ros-humble-sensor-msgs ros-humble-tf2-msgs python3-colcon-common-extensions >/dev/null && source /opt/ros/humble/setup.bash && cd /recorder_ws && colcon build && colcon test --event-handlers console_direct+ && colcon test-result --verbose'
+
   printf '%s\n' 'Software-only ROS tests passed.'
 fi
 

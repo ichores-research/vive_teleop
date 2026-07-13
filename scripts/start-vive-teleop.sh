@@ -13,6 +13,7 @@ unity_player="${unity_project}/Builds/Linux/vive-teleop"
 unity_build_stamp="${unity_player}.build-stamp"
 log_follow_pids=()
 launch_lock="${XDG_RUNTIME_DIR:-/tmp}/vive-teleop-start.lock"
+recorder_started=false
 
 exec 9>"$launch_lock"
 if ! flock --nonblock 9; then
@@ -56,6 +57,13 @@ start_container_log() {
 
 stop_background_logs() {
   local status=$?
+
+  if [[ "$recorder_started" == "true" ]] && \
+     docker ps --format '{{.Names}}' | grep -Fxq data_recorder_wifi; then
+    log "Stopping dataset recorder gracefully"
+    docker stop --time 30 data_recorder_wifi >/dev/null 2>&1 || \
+      log "Dataset recorder did not stop cleanly"
+  fi
 
   if [[ "${#log_follow_pids[@]}" -gt 0 ]]; then
     log "Stopping background Docker log followers"
@@ -114,6 +122,10 @@ run_and_log \
 start_container_log "webrtc_server_wifi"
 start_container_log "moveit_server_wifi"
 start_container_log "coturn_wifi"
+if [[ "${VIVE_TELEOP_RECORD_DATASET:-0}" == "1" ]]; then
+  recorder_started=true
+  start_container_log "data_recorder_wifi"
+fi
 
 host_ip="$("$script_dir/detect-webrtc-host-ip.sh")"
 config_url="http://${host_ip}:8088/config"

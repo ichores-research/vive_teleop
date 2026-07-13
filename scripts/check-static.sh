@@ -19,13 +19,25 @@ while IFS= read -r script; do
   bash -n "$script"
 done < <(find scripts -maxdepth 1 -type f -name '*.sh' -print)
 bash -n moveit_server/ros_entrypoint.sh
+bash -n data_recorder/ros_entrypoint.sh
+
+unexpected_recorded_user_topics="$(
+  grep -E '^[[:space:]]+- /vive/' \
+    data_recorder/src/vive_dataset_recorder/config/recorder.yaml |
+    grep -vE '^[[:space:]]+- /vive/hand_target_active$' || true
+)"
+if [[ -n "$unexpected_recorded_user_topics" ]]; then
+  printf 'Recorder whitelist contains forbidden user input:\n%s\n' \
+    "$unexpected_recorded_user_topics" >&2
+  exit 1
+fi
 
 if command -v shellcheck >/dev/null 2>&1; then
   mapfile -t shell_scripts < <(
     find scripts -maxdepth 1 -type f -name '*.sh' -print
   )
   shellcheck --exclude=SC1090,SC1091,SC2016 \
-    moveit_server/ros_entrypoint.sh "${shell_scripts[@]}"
+    moveit_server/ros_entrypoint.sh data_recorder/ros_entrypoint.sh "${shell_scripts[@]}"
 fi
 
 python3 - <<'PY'
@@ -49,6 +61,7 @@ for path in Path("unity-vr-headset").rglob("*.json"):
 for path in (
     Path("moveit_server/src/vive_moveit_server/package.xml"),
     Path("webrtc_server/src/image_listener/package.xml"),
+    Path("data_recorder/src/vive_dataset_recorder/package.xml"),
 ):
     ET.parse(path)
 PY
