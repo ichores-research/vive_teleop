@@ -14,8 +14,9 @@ RUN apt-get update && apt-get install -y \
     ros-humble-moveit \
     ros-humble-moveit-servo \
     ros-humble-tiago-moveit-config \
+    ros-humble-ament-cmake-gtest \
     python3-colcon-common-extensions \
-    python3-setuptools \
+    libeigen3-dev \
     build-essential \
     cmake \
     git \
@@ -26,7 +27,7 @@ RUN apt-get update && apt-get install -y \
 COPY src /moveit_ws/src
 
 RUN source /opt/ros/humble/setup.bash && \
-    colcon build --symlink-install
+    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 COPY ros_entrypoint.sh /ros_entrypoint.sh
 RUN chmod +x /ros_entrypoint.sh

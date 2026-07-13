@@ -74,9 +74,9 @@ Evidence:
 - [`input_publisher.py` lines 217-226](../../webrtc_server/src/image_listener/image_listener/input_publisher.py#L217)
   accepts a NaN norm because `NaN < threshold` is false.
 - The same pattern exists in
-  [`arm_movement.py` lines 21-36](../../moveit_server/src/vive_moveit_server/vive_moveit_server/arm_movement.py#L21),
-  [`servo_pose_bridge.py` lines 15-30](../../moveit_server/src/vive_moveit_server/vive_moveit_server/servo_pose_bridge.py#L15),
-  and [`vive_moveit_server.py` lines 48-63](../../moveit_server/src/vive_moveit_server/vive_moveit_server/vive_moveit_server.py#L48).
+  [`arm_movement.py` lines 21-36](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/vive_moveit_server/arm_movement.py#L21-L36),
+  [`servo_pose_bridge.py` lines 15-30](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/vive_moveit_server/servo_pose_bridge.py#L15-L30),
+  and [`vive_moveit_server.py` lines 48-63](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/vive_moveit_server/vive_moveit_server.py#L48-L63).
 
 Impact: NaN or infinity may propagate into targets, feedback error and twist
 commands. Downstream behavior is controller-dependent and must not be relied on.
@@ -91,7 +91,7 @@ pose, gate, trajectory or twist.
 
 ### VT-004 — Servo feedback accepts an arbitrarily stale wrist transform
 
-Evidence: [`servo_pose_bridge.py` lines 317-331](../../moveit_server/src/vive_moveit_server/vive_moveit_server/servo_pose_bridge.py#L317)
+Evidence: [`servo_pose_bridge.py` lines 317-331](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/vive_moveit_server/servo_pose_bridge.py#L317-L331)
 looks up the latest transform but does not inspect its timestamp. The snapshot
 API does perform an age check in
 [`robot_state.py` lines 223-243](../../webrtc_server/src/image_listener/image_listener/robot_state.py#L223).
@@ -111,7 +111,7 @@ bound.
 
 Evidence:
 
-- [`servo_pose_bridge.yaml` lines 15-18](../../moveit_server/src/vive_moveit_server/config/servo_pose_bridge.yaml#L15)
+- [`servo_pose_bridge.yaml` lines 15-18](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/config/servo_pose_bridge.yaml#L15-L18)
   disables linear and angular caps.
 - [`tiago_servo.yaml` line 42](../../moveit_server/src/vive_moveit_server/config/tiago_servo.yaml#L42)
   disables collision checking.
@@ -188,7 +188,7 @@ flags and explicit command gates. Preserve raw envelopes for diagnosis/recording
 
 Command publishers use integer depth 10 or system defaults, for example
 [`input_publisher.py` lines 23-42](../../webrtc_server/src/image_listener/image_listener/input_publisher.py#L23)
-and [`arm_movement.py` lines 261-270](../../moveit_server/src/vive_moveit_server/vive_moveit_server/arm_movement.py#L261).
+and [`arm_movement.py` lines 261-270](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/vive_moveit_server/arm_movement.py#L261-L270).
 For streaming teleoperation, explicitly choose QoS. Evaluate reliable versus
 best-effort on the actual network, but prefer keep-last depth 1, volatile
 durability and a lifespan/deadline compatible with the command timeout so old
@@ -196,7 +196,7 @@ commands cannot build a queue.
 
 ### VT-010 — Gripper control uses joint positions without freshness tracking
 
-[`vive_moveit_server.py` lines 327-397](../../moveit_server/src/vive_moveit_server/vive_moveit_server/vive_moveit_server.py#L327)
+[`vive_moveit_server.py` lines 327-397](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/vive_moveit_server/vive_moveit_server.py#L327-L397)
 caches positions indefinitely and uses them to suppress/size trajectories.
 Track receipt time, validate finite values, reject stale state, and report why
 a command was rejected.
@@ -304,7 +304,7 @@ the design first, then implement the phased MVP in the roadmap.
 ### VT-024 — Documentation contains measurable contradictions
 
 The data-recording design says the pose bridge publishes at 50 Hz, while
-[`servo_pose_bridge.yaml` line 9](../../moveit_server/src/vive_moveit_server/config/servo_pose_bridge.yaml#L9)
+[`servo_pose_bridge.yaml` line 9](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/config/servo_pose_bridge.yaml#L9)
 sets 100 Hz. The guide contains user-specific absolute paths and describes
 readiness differently from Unity. Generate a configuration reference from
 declared parameters or test documentation claims against loaded YAML.
@@ -336,7 +336,7 @@ across Python, JavaScript and C# tests.
 ### VT-027 — Fallback defaults disagree with deployed YAML
 
 `ViveMoveItServer` defaults `arm_group` to `arm_torso` at
-[`vive_moveit_server.py` line 76](../../moveit_server/src/vive_moveit_server/vive_moveit_server/vive_moveit_server.py#L76),
+[`vive_moveit_server.py` line 76](https://github.com/ichores-research/vive_teleop/blob/0fb7718f66f2fbfb8f1029233b7a7547dbcc120d/moveit_server/src/vive_moveit_server/vive_moveit_server/vive_moveit_server.py#L76),
 while the deployed profile uses `arm`. Head signs and command duration also
 differ between code defaults and YAML. Defaults should be conservative and
 consistent, or required parameters should fail startup when absent.

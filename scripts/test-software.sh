@@ -13,7 +13,7 @@ Usage: ./scripts/test-software.sh [--all|--static|--ros|--unity]
             This is the default.
   --static  Run non-hardware static checks only.
   --ros     Run static checks, build the complete Compose stack, and run ROS
-            Python tests.
+            C++ and Python tests.
   --unity   Run static checks and compile the Unity Linux player.
 EOF
 }
@@ -66,11 +66,31 @@ if [[ "$run_ros" == "true" ]]; then
 
   printf '%s\n' 'Docker Compose images built successfully.'
 
+  moveit_test_image="$(
+    env \
+      CYCLONEDDS_HOST_CONFIG=/tmp/vive-teleop-ci-cyclonedds.xml \
+      WEBRTC_TURN_URLS='turn:127.0.0.1:3478?transport=udp' \
+      WEBRTC_HOST_IP=192.0.2.10 \
+      WEBRTC_PUBLIC_TURN_URLS='turn:192.0.2.10:3478?transport=udp' \
+      ROS_FIELD_HOST_IP=192.0.2.20 \
+      docker compose \
+        -f "$repo_dir/docker-compose.yml" \
+        -f "$repo_dir/docker-compose.wifi.yml" \
+        images -q moveit_server
+  )"
+  if [[ -z "$moveit_test_image" ]]; then
+    printf '%s\n' 'Could not resolve the built MoveIt server image.' >&2
+    exit 1
+  fi
+
+  docker run --rm --entrypoint bash "$moveit_test_image" \
+    -lc 'source /opt/ros/humble/setup.bash && source /moveit_ws/install/setup.bash && cd /moveit_ws && colcon test --packages-select vive_moveit_server --event-handlers console_direct+ && colcon test-result --verbose'
+
   docker run --rm --entrypoint bash \
     -v "$repo_dir:/workspace:ro" \
     -w /workspace \
     "$ros_test_image" \
-    -lc 'source /opt/ros/humble/setup.bash && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/workspace/moveit_server/src/vive_moveit_server:/workspace/webrtc_server/src/image_listener:$PYTHONPATH python3 -m pytest -p no:cacheprovider -q moveit_server/src/vive_moveit_server/test webrtc_server/src/image_listener/test'
+    -lc 'source /opt/ros/humble/setup.bash && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/workspace/webrtc_server/src/image_listener:$PYTHONPATH python3 -m pytest -p no:cacheprovider -q webrtc_server/src/image_listener/test'
 
   docker run --rm --entrypoint bash \
     -v "$repo_dir/data_recorder/src:/recorder_ws/src:ro" \

@@ -351,7 +351,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "servo_launch_enabled",
                 default_value="true",
-                description="Start MoveIt Servo and the Humble pose-command bridge.",
+                description="Start the MoveIt Servo seven-joint differential IK runtime.",
             ),
             OpaqueFunction(function=include_optional_robot_description_launch),
             OpaqueFunction(function=include_optional_moveit_launch),

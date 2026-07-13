@@ -52,7 +52,7 @@ panel interrupting the task.
 | Operator input | Robot response |
 | --- | --- |
 | Turn or tilt the headset | Pan or tilt the robot head |
-| Move the right controller while holding the deadman | Move and rotate the robot wrist |
+| Move the right controller while holding the deadman | Move and rotate the robot wrist, with controller top mapped to tool top |
 | Swipe the controller trackpad or joystick without clicking | Open or close the gripper |
 | Hold the trackpad/joystick click and push in any direction | Drive and steer the differential base continuously |
 | Release the deadman | Stop arm pursuit and clear the active target |
@@ -64,14 +64,14 @@ flowchart LR
     O["Operator<br/>Vive headset + controller"]
     U["Unity VR client"]
     W["WebRTC gateway"]
-    T["ROS 2 teleop control"]
+    T["C++ ROS 2 teleop<br/>100 Hz Cartesian control"]
     S["MoveIt Servo"]
     R["TIAGo<br/>head · arm · gripper · base · camera"]
 
     O -->|head and hand motion| U
     U -->|pose + deadman + gripper + base<br/>WebRTC data channel| W
     W -->|typed /vive/* topics| T
-    T -->|wrist target| S
+    T -->|velocity-limited Cartesian twist| S
     T -->|head + gripper trajectories<br/>guarded base velocity| R
     S -->|7-joint arm trajectory| R
     R -->|camera + live robot state| W
@@ -88,7 +88,8 @@ flowchart LR
 
 The control path separates transport from robot motion. WebRTC carries video and
 controller data across the network; the gateway converts input into typed ROS 2
-messages; MoveIt Servo resolves wrist motion through all seven arm joints.
+messages; the C++ controller closes the wrist pose loop from live TF at 100 Hz;
+MoveIt Servo resolves that Cartesian motion through all seven arm joints.
 
 ### Arm command lifecycle
 
@@ -102,8 +103,10 @@ stateDiagram-v2
     Halted --> Idle: target cleared and zero-twist commands sent
 ```
 
-Each press anchors the controller to the robot's current wrist pose, so engaging
-control does not cause a jump. Tracking uses the headset frame captured at that
+Each press anchors the controller's configured top frame to the robot's current
+tool frame, so engaging control does not cause a jump. Local controller
+orientation changes are applied in the tool's local frame while translation
+remains robot-base aligned. Tracking uses the headset frame captured at that
 moment, allowing the operator to keep looking around without steering the arm.
 
 ## Engineering highlights
@@ -111,7 +114,11 @@ moment, allowing the operator to keep looking around without steering the arm.
 - Bidirectional WebRTC: live robot video in one direction and VR input in
   the other, with a TURN relay for the field-network setup.
 - Clutch-relative 6-DoF control: controller translation and rotation are mapped
-  from a fresh robot pose rather than an old absolute target.
+  from a fresh robot pose rather than an old absolute target, with explicit
+  controller-top alignment and tracked-origin offset calibration.
+- Real-time-oriented C++ arm loop: 100 Hz latest-value pose feedback,
+  target-velocity feed-forward, low-pass filtering, Cartesian speed/acceleration
+  limits, stale-input/TF watchdogs, memory locking, and `SCHED_FIFO` scheduling.
 - Layered motion handling: deadman release, stale-input timeout, workspace bounds,
   joint-limit scaling, singularity scaling, smoothing, and immediate target clear.
 - Independent head, arm, gripper, and base paths: each control can stay responsive

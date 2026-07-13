@@ -8,7 +8,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
@@ -108,31 +109,28 @@ def _start_servo_runtime(context, *args, **kwargs):
     }
 
     return [
-        Node(
-            package="moveit_servo",
-            executable="servo_node_main",
+        ComposableNodeContainer(
+            name="servo_node_container",
+            namespace="/",
+            package="rclcpp_components",
+            executable="component_container_mt",
             output="screen",
-            parameters=[
-                servo_params,
-                moveit_config.robot_description_semantic,
-                moveit_config.robot_description_kinematics,
-                moveit_config.joint_limits,
-                robot_model_params,
-            ],
-        ),
-        Node(
-            package="vive_moveit_server",
-            executable="servo_pose_bridge",
-            name="servo_pose_bridge",
-            output="screen",
-            parameters=[
-                os.path.join(
-                    get_package_share_directory("vive_moveit_server"),
-                    "config",
-                    "servo_pose_bridge.yaml",
+            composable_node_descriptions=[
+                ComposableNode(
+                    package="moveit_servo",
+                    plugin="moveit_servo::ServoNode",
+                    name="servo_node",
+                    parameters=[
+                        servo_params,
+                        moveit_config.robot_description_semantic,
+                        moveit_config.robot_description_kinematics,
+                        moveit_config.joint_limits,
+                        robot_model_params,
+                    ],
+                    extra_arguments=[{"use_intra_process_comms": True}],
                 )
             ],
-        ),
+        )
     ]
 
 

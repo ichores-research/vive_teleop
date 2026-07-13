@@ -2,8 +2,8 @@ moveit_servo:
   use_gazebo: false
 
   command_in_type: speed_units
-  # These scales only apply to unitless commands. The pose bridge publishes
-  # physical speed units, and Servo enforces the robot's joint velocity limits.
+  # These scales only apply to unitless commands. The C++ Cartesian controller
+  # publishes physical speed units, and Servo enforces joint velocity limits.
   scale:
     linear: 2.50
     rotational: 3.50

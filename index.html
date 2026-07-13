@@ -968,7 +968,10 @@
 
             inputPc = new RTCPeerConnection(peerConfig());
             attachStateLogging(inputPc, 'Input', inputStatusEl);
-            inputChannel = inputPc.createDataChannel('input');
+            inputChannel = inputPc.createDataChannel('input', {
+                ordered: true,
+                maxPacketLifeTime: 50,
+            });
             setStatus(inputStatusEl, 'Input: signaling', 'warn');
             updateButtons();
 

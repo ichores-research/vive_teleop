@@ -49,25 +49,36 @@ servo = get_parameters(
     "/servo_node",
     [
         "moveit_servo.move_group_name",
+        "moveit_servo.publish_period",
+        "moveit_servo.incoming_command_timeout",
         "moveit_servo.override_velocity_scaling_factor",
         "moveit_servo.check_collisions",
         "robot_description_semantic",
     ],
 )
-bridge = get_parameters(
-    node,
-    "/servo_pose_bridge",
-    [
-        "max_linear_velocity_mps",
-        "max_angular_velocity_radps",
-        "pose_active_topic",
-        "halt_command_count",
-    ],
-)
-base = get_parameters(
+teleop = get_parameters(
     node,
     "/vive_moveit_server",
     [
+        "arm_group",
+        "arm_control_rate_hz",
+        "hand_target_topic",
+        "hand_target_active_topic",
+        "hand_target_timeout_sec",
+        "servo_twist_topic",
+        "servo_pose_target_topic",
+        "servo_pose_active_topic",
+        "arm_halt_command_count",
+        "max_linear_velocity_mps",
+        "max_angular_velocity_radps",
+        "max_linear_acceleration_mps2",
+        "max_angular_acceleration_radps2",
+        "controller_to_tool_rotation_rpy_rad",
+        "controller_top_offset_m",
+        "enable_realtime_scheduling",
+        "realtime_scheduling_active",
+        "lock_memory",
+        "memory_lock_active",
         "base_input_topic",
         "base_active_topic",
         "base_command_topic",
@@ -79,32 +90,73 @@ base = get_parameters(
 )
 
 arm_group = servo["moveit_servo.move_group_name"]
-linear_cap = float(bridge["max_linear_velocity_mps"])
-angular_cap = float(bridge["max_angular_velocity_radps"])
+server_arm_group = teleop["arm_group"]
+servo_period = float(servo["moveit_servo.publish_period"])
+servo_timeout = float(servo["moveit_servo.incoming_command_timeout"])
+control_rate = float(teleop["arm_control_rate_hz"])
+linear_cap = float(teleop["max_linear_velocity_mps"])
+angular_cap = float(teleop["max_angular_velocity_radps"])
+linear_acceleration = float(teleop["max_linear_acceleration_mps2"])
+angular_acceleration = float(teleop["max_angular_acceleration_radps2"])
 velocity_override = float(servo["moveit_servo.override_velocity_scaling_factor"])
 collision_check = bool(servo["moveit_servo.check_collisions"])
-pose_active_topic = bridge["pose_active_topic"]
-halt_command_count = int(bridge["halt_command_count"])
-base_input_topic = base["base_input_topic"]
-base_active_topic = base["base_active_topic"]
-base_command_topic = base["base_command_topic"]
-base_timeout = float(base["base_input_timeout_sec"])
-base_linear_limit = float(base["base_max_linear_velocity_mps"])
-base_angular_limit = float(base["base_max_angular_velocity_radps"])
-base_halt_command_count = int(base["base_halt_command_count"])
+hand_target_topic = teleop["hand_target_topic"]
+hand_active_topic = teleop["hand_target_active_topic"]
+hand_timeout = float(teleop["hand_target_timeout_sec"])
+twist_topic = teleop["servo_twist_topic"]
+pose_target_topic = teleop["servo_pose_target_topic"]
+pose_active_topic = teleop["servo_pose_active_topic"]
+halt_command_count = int(teleop["arm_halt_command_count"])
+controller_alignment = teleop["controller_to_tool_rotation_rpy_rad"]
+controller_top_offset = teleop["controller_top_offset_m"]
+realtime_requested = bool(teleop["enable_realtime_scheduling"])
+realtime_active = bool(teleop["realtime_scheduling_active"])
+memory_lock_requested = bool(teleop["lock_memory"])
+memory_lock_active = bool(teleop["memory_lock_active"])
+base_input_topic = teleop["base_input_topic"]
+base_active_topic = teleop["base_active_topic"]
+base_command_topic = teleop["base_command_topic"]
+base_timeout = float(teleop["base_input_timeout_sec"])
+base_linear_limit = float(teleop["base_max_linear_velocity_mps"])
+base_angular_limit = float(teleop["base_max_angular_velocity_radps"])
+base_halt_command_count = int(teleop["base_halt_command_count"])
 
 if arm_group != "arm":
     raise SystemExit("MoveIt Servo group is not arm")
+if server_arm_group != "arm":
+    raise SystemExit("C++ teleop arm group is not arm")
 if pose_active_topic != "/servo_node/pose_target_active":
     raise SystemExit("unexpected Servo deadman topic")
-if not math.isclose(linear_cap, 0.0, abs_tol=1e-12):
-    raise SystemExit("linear bridge velocity cap is not disabled")
-if not math.isclose(angular_cap, 0.0, abs_tol=1e-12):
-    raise SystemExit("angular bridge velocity cap is not disabled")
+if twist_topic != "/servo_node/delta_twist_cmds":
+    raise SystemExit("unexpected Servo twist topic")
+if control_rate < 100.0:
+    raise SystemExit("C++ Cartesian control rate is below 100 Hz")
+if not math.isclose(servo_period, 0.01, abs_tol=1e-6):
+    raise SystemExit("MoveIt Servo publish period is not 10 ms")
+if not 0.02 <= servo_timeout <= hand_timeout:
+    raise SystemExit("Servo timeout is not bounded by the arm input timeout")
+if not 0.0 < linear_cap <= 0.5:
+    raise SystemExit("linear Cartesian speed cap is outside 0..0.5 m/s")
+if not 0.0 < angular_cap <= 2.0:
+    raise SystemExit("angular Cartesian speed cap is outside 0..2 rad/s")
+if linear_acceleration <= 0.0 or angular_acceleration <= 0.0:
+    raise SystemExit("Cartesian acceleration limits must be positive")
 if not math.isclose(velocity_override, 0.0, abs_tol=1e-12):
     raise SystemExit("automatic Servo joint-limit scaling is overridden")
 if halt_command_count < 1:
     raise SystemExit("deadman halt command count must be positive")
+if len(controller_alignment) != 3 or not all(
+    math.isfinite(float(value)) for value in controller_alignment
+):
+    raise SystemExit("controller-to-tool alignment must contain three finite values")
+if len(controller_top_offset) != 3 or not all(
+    math.isfinite(float(value)) for value in controller_top_offset
+):
+    raise SystemExit("controller top offset must contain three finite values")
+if realtime_requested and not realtime_active:
+    raise SystemExit("C++ teleop executor requested SCHED_FIFO but it is inactive")
+if memory_lock_requested and not memory_lock_active:
+    raise SystemExit("C++ teleop requested memory locking but it is inactive")
 if not 0.02 <= base_timeout <= 0.5:
     raise SystemExit("base command timeout is outside 0.02..0.5 seconds")
 if base_linear_limit <= 0.0 or base_angular_limit <= 0.0:
@@ -112,19 +164,39 @@ if base_linear_limit <= 0.0 or base_angular_limit <= 0.0:
 if base_halt_command_count < 1:
     raise SystemExit("base halt command count must be positive")
 
-required_topics = [pose_active_topic, base_input_topic, base_active_topic, base_command_topic]
+required_subscriptions = [
+    hand_target_topic,
+    hand_active_topic,
+    twist_topic,
+    base_input_topic,
+    base_active_topic,
+    base_command_topic,
+]
+required_publishers = [pose_target_topic, pose_active_topic, twist_topic]
 deadline = time.monotonic() + 3.0
 while True:
-    missing_topics = [
+    missing_subscriptions = [
         topic
-        for topic in required_topics
+        for topic in required_subscriptions
         if not node.get_subscriptions_info_by_topic(topic)
     ]
-    if not missing_topics or time.monotonic() >= deadline:
+    missing_publishers = [
+        topic
+        for topic in required_publishers
+        if not node.get_publishers_info_by_topic(topic)
+    ]
+    if (
+        (not missing_subscriptions and not missing_publishers)
+        or time.monotonic() >= deadline
+    ):
         break
     rclpy.spin_once(node, timeout_sec=0.2)
-if missing_topics:
-    raise SystemExit("topics without subscribers: " + ", ".join(missing_topics))
+if missing_subscriptions:
+    raise SystemExit(
+        "topics without subscribers: " + ", ".join(missing_subscriptions)
+    )
+if missing_publishers:
+    raise SystemExit("topics without publishers: " + ", ".join(missing_publishers))
 
 root = ET.fromstring(servo["robot_description_semantic"])
 group = next(
@@ -147,9 +219,11 @@ if "torso_lift_joint" in joints:
 
 print("arm joints=" + ",".join(sorted(expected)))
 print(
-    f"group={arm_group} linear_cap={linear_cap} angular_cap={angular_cap} "
+    f"group={arm_group} cpp_control_hz={control_rate} servo_period={servo_period} "
+    f"linear_cap={linear_cap} angular_cap={angular_cap} "
     f"joint_limit_scaling=automatic collision_check={str(collision_check).lower()} "
     f"deadman_halt_topic={pose_active_topic} halt_commands={halt_command_count} "
+    f"sched_fifo={str(realtime_active).lower()} mlock={str(memory_lock_active).lower()} "
     f"base_output={base_command_topic} base_timeout={base_timeout} "
     f"base_limits={base_linear_limit},{base_angular_limit} "
     f"base_halt_commands={base_halt_command_count}"

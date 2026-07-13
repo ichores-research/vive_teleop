@@ -34,7 +34,9 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     public bool hmdPoseStreamingEnabled;
     public KeyCode toggleHmdPoseKey = KeyCode.S;
     public Transform poseSource;
-    public float poseSendRateHz = 30f;
+    public float poseSendRateHz = 90f;
+    [Range(10, 500)]
+    public int inputMaxPacketLifetimeMs = 50;
     public bool sendPoseWhenChannelOpens = true;
     public bool sendJoystickWristPose = true;
     public Transform wristPoseSource;
@@ -443,7 +445,19 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
     IEnumerator ConnectInput(ServerConfig serverConfig)
     {
         inputPeer = CreatePeer(serverConfig, "input");
-        inputChannel = inputPeer.CreateDataChannel("input");
+        // Keep sample ordering, but allow stale motion packets to expire rather
+        // than block a newer controller pose behind retransmissions.
+        var inputChannelOptions = new RTCDataChannelInit
+        {
+            ordered = true,
+            maxPacketLifeTime = Mathf.Clamp(
+                inputMaxPacketLifetimeMs,
+                10,
+                500),
+        };
+        inputChannel = inputPeer.CreateDataChannel(
+            "input",
+            inputChannelOptions);
         inputChannel.OnOpen = () =>
         {
             inputChannelOpen = true;
@@ -612,7 +626,8 @@ public class ViveTeleopWebRtcClient : MonoBehaviour
 
     IEnumerator SendPoseLoop()
     {
-        var wait = new WaitForSeconds(1f / Mathf.Max(1f, poseSendRateHz));
+        var wait = new WaitForSecondsRealtime(
+            1f / Mathf.Max(1f, poseSendRateHz));
         while (true)
         {
             SendPose();

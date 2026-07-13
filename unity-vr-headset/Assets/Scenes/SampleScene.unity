@@ -685,7 +685,8 @@ MonoBehaviour:
   connectInput: 1
   sendHmdPose: 1
   poseSource: {fileID: 0}
-  poseSendRateHz: 30
+  poseSendRateHz: 90
+  inputMaxPacketLifetimeMs: 50
   sendPoseWhenChannelOpens: 1
   sendJoystickWristPose: 1
   wristPoseSource: {fileID: 0}

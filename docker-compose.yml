@@ -45,7 +45,6 @@ services:
 
     volumes:
       - ./moveit_server/cyclonedds.xml:/moveit_ws/cyclonedds.xml:ro
-      - ./moveit_server/src/vive_moveit_server:/moveit_ws/src/vive_moveit_server
 
     working_dir: /moveit_ws
 
@@ -55,7 +54,18 @@ services:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CYCLONEDDS_URI=file:///moveit_ws/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-67}
-      - PYTHONUNBUFFERED=1
+
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+
+    ulimits:
+      rtprio:
+        soft: 90
+        hard: 90
+      memlock:
+        soft: -1
+        hard: -1
 
     networks:
       field_net:

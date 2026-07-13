@@ -80,7 +80,7 @@ label. Record all inexpensive action stages now, then choose one during export.
 | Layer | Current topic | Meaning | Dataset role |
 | --- | --- | --- | --- |
 | Operator target | `/vive/hand_target_pose` | Unity/browser target accepted by gateway | Optional intent/provenance |
-| Effective gate | `/servo_node/pose_target_active` | Whether bridge accepts pose pursuit | Required action-valid mask |
+| Effective gate | `/servo_node/pose_target_active` | Whether the C++ Cartesian controller accepts pose pursuit | Required action-valid mask |
 | Mapped robot target | `/servo_node/pose_target_cmds` | Clutch-relative, workspace-constrained robot pose | Recommended high-level action source |
 | Executable Cartesian command | `/servo_node/delta_twist_cmds` | Feedback/feed-forward physical twist sent to Servo | Recommended executed-action source |
 | Low-level arm command | `/arm_controller/joint_trajectory` | Servo output sent to arm controller | Required diagnostic/low-level action |
@@ -117,7 +117,7 @@ mapping.
 | `/vive/hand_target_active` | `std_msgs/msg/Bool` | `webrtc_server` | Operator deadman and capture gate | Controller always observes; record while writer active |
 | `/servo_node/pose_target_active` | `std_msgs/msg/Bool` | `moveit_server` | Effective arm-action mask | Record while writer active; do not require at bootstrap |
 | `/servo_node/pose_target_cmds` | `geometry_msgs/msg/PoseStamped` | `moveit_server` | Mapped high-level robot action | Active, post-roll |
-| `/servo_node/delta_twist_cmds` | `geometry_msgs/msg/TwistStamped` | pose bridge | Executable Cartesian command | Active, post-roll |
+| `/servo_node/delta_twist_cmds` | `geometry_msgs/msg/TwistStamped` | `moveit_server` C++ node | Executable Cartesian command | Active, post-roll |
 | `/arm_controller/joint_trajectory` | `trajectory_msgs/msg/JointTrajectory` | MoveIt Servo | Low-level arm command | Active, post-roll |
 | `/vive/gripper_opening` | `std_msgs/msg/Float64` | `webrtc_server` | Normalized gripper intent | Active, post-roll |
 | `/gripper_controller/joint_trajectory` | `trajectory_msgs/msg/JointTrajectory` | `moveit_server` | Physical gripper command | Active, post-roll |
@@ -190,8 +190,9 @@ or odometry even though the current Servo group intentionally excludes
 
 ## Current Unity Payload Inventory
 
-Unity currently builds `PosePayload` at `poseSendRateHz`, configured as `30 Hz`,
-and sets `timestamp = Time.realtimeSinceStartup`.
+Unity currently builds `PosePayload` at `poseSendRateHz`, configured as `90 Hz`,
+and sets `timestamp = Time.realtimeSinceStartup`. The ordered input channel uses
+a `50 ms` maximum packet lifetime.
 
 ### Envelope
 
@@ -507,7 +508,6 @@ recordings/
         session_<session_id>_0.mcap
       parameters/
         vive_moveit_server.yaml
-        servo_pose_bridge.yaml
         servo_node.yaml
       config/
         topics.yaml
