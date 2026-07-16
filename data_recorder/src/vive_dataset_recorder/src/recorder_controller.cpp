@@ -62,8 +62,8 @@ RecorderController::RecorderController(const rclcpp::NodeOptions &options)
       declare_parameter<int64_t>("max_cache_size_bytes", 104857600LL);
   max_bag_size_bytes_ = declare_parameter<int64_t>("max_bag_size_bytes", 0);
   max_bag_duration_sec_ = declare_parameter<int64_t>("max_bag_duration_sec", 0);
-  record_topics_ =
-      declare_parameter<std::vector<std::string>>("record_topics", {});
+  record_topics_ = declare_parameter<std::vector<std::string>>(
+      "record_topics", std::vector<std::string>{});
 
   validate_configuration();
   state_machine_ = std::make_unique<RecorderStateMachine>(
@@ -199,21 +199,17 @@ void RecorderController::configure_rosbag() {
   record_options.include_unpublished_topics = true;
   record_options.ignore_leaf_topics = false;
   record_options.start_paused = false;
-  record_options.topic_qos_profile_overrides[camera_topic_] =
-      rclcpp::SensorDataQoS();
-  record_options
-      .topic_qos_profile_overrides["/head_front_camera/rgb/camera_info"] =
-      rclcpp::SensorDataQoS();
-  record_options.topic_qos_profile_overrides["/joint_states"] =
-      rclcpp::SensorDataQoS();
-  record_options.topic_qos_profile_overrides["/tf"] =
-      rclcpp::QoS(100).best_effort();
-  record_options.topic_qos_profile_overrides["/tf_static"] =
-      rclcpp::QoS(1).reliable().transient_local();
-  record_options.topic_qos_profile_overrides[frame_state_topic_] =
-      rclcpp::QoS(100).reliable();
-  record_options.topic_qos_profile_overrides[event_topic_] =
-      rclcpp::QoS(100).reliable();
+  auto &qos_overrides = record_options.topic_qos_profile_overrides;
+  qos_overrides.insert_or_assign(camera_topic_, rclcpp::SensorDataQoS());
+  qos_overrides.insert_or_assign("/head_front_camera/rgb/camera_info",
+                                 rclcpp::SensorDataQoS());
+  qos_overrides.insert_or_assign("/joint_states", rclcpp::SensorDataQoS());
+  qos_overrides.insert_or_assign("/tf", rclcpp::QoS(100).best_effort());
+  qos_overrides.insert_or_assign(
+      "/tf_static", rclcpp::QoS(1).reliable().transient_local());
+  qos_overrides.insert_or_assign(frame_state_topic_,
+                                 rclcpp::QoS(100).reliable());
+  qos_overrides.insert_or_assign(event_topic_, rclcpp::QoS(100).reliable());
 
   auto writer = std::make_shared<rosbag2_cpp::Writer>();
   recorder_ = std::make_shared<rosbag2_transport::Recorder>(
