@@ -18,11 +18,12 @@ dataset conversion, and policy training in its first version.
 - Wi-Fi runtime: ROS containers use host networking and a generated
   CycloneDDS configuration.
 - Field runtime: ROS containers use the `10.68.0.0/24` ipvlan network.
-- Unity sends input at a configured `poseSendRateHz`, currently `30 Hz`.
-- `moveit_server` evaluates pending hand targets on a `0.02 s` timer.
-- Both `hand_target_timeout_sec` and the bridge `target_timeout_sec` are
-  currently `0.12 s`.
-- The deployed Servo pose bridge publishes at `100 Hz`.
+- Unity sends input at a configured `poseSendRateHz`, currently `90 Hz`, over an
+  ordered data channel with a `50 ms` packet lifetime.
+- The C++ `moveit_server` keeps only the latest hand target and closes the
+  Cartesian pose loop at `100 Hz`.
+- `hand_target_timeout_sec` is `0.12 s`, the independent tool-TF timeout is
+  `0.20 s`, and Servo's incoming-command timeout is `0.10 s`.
 - Head commands are produced at `20 Hz`.
 - Gripper input is independent of the wrist deadman.
 - Unity's current JSONL recording is controlled manually and is not aligned to
@@ -138,9 +139,9 @@ Record `/servo_node/pose_target_active` as the effective-action mask.
 
 This is downstream of gateway parsing and `moveit_server` clutch/timeout logic.
 It allows offline measurement of gateway/control latency and distinguishes
-requested input from pose pursuit accepted by the Servo bridge. It must not be
-the capture trigger because the publisher is created lazily and its first
-message can race the first pose command.
+requested input from pose pursuit accepted by the C++ Cartesian controller. It
+must not be the capture trigger because live TF and Servo can still be warming
+up when the first operator gate arrives.
 
 ### Recording Enable
 
@@ -328,7 +329,7 @@ Do not implement control by:
 - Writing space characters into a pseudo-terminal.
 - Sending undocumented signals to the CLI.
 - Starting and killing a recorder process for every deadman interval.
-- Creating one bag directory per 30 Hz input sample or per short clutch press.
+- Creating one bag directory per input sample or per short clutch press.
 
 ## Roll Strategy
 

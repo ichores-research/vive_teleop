@@ -185,8 +185,8 @@ def include_optional_servo_launch(context, *args, **kwargs):
     if not is_truthy(enabled):
         return [
             LogInfo(
-                msg="MoveIt Servo runtime disabled; arm pose commands will "
-                "not be consumed."
+                msg="MoveIt Servo runtime disabled; resolved arm joint "
+                "commands will not be consumed."
             )
         ]
 
@@ -351,7 +351,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "servo_launch_enabled",
                 default_value="true",
-                description="Start MoveIt Servo and the Humble pose-command bridge.",
+                description="Start MoveIt Servo for seven-joint safety, smoothing, and controller output.",
             ),
             OpaqueFunction(function=include_optional_robot_description_launch),
             OpaqueFunction(function=include_optional_moveit_launch),

@@ -79,6 +79,7 @@ ros2 topic hz /head_front_camera/rgb/image_raw
 ros2 topic bw /head_front_camera/rgb/image_raw
 ros2 topic hz /joint_states
 ros2 topic hz /servo_node/delta_twist_cmds
+ros2 topic hz /servo_node/delta_joint_cmds
 ```
 
 Capture at least one minute under actual teleoperation. Use measured p95/p99
@@ -249,6 +250,7 @@ active_required:
   - /servo_node/pose_target_active
   - /servo_node/pose_target_cmds
   - /servo_node/delta_twist_cmds
+  - /servo_node/delta_joint_cmds
   - /arm_controller/joint_trajectory
   - /vive/gripper_opening
   - /gripper_controller/joint_trajectory

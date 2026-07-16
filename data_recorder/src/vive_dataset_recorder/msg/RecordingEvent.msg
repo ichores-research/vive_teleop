@@ -1,0 +1,19 @@
+uint8 SESSION_START=1
+uint8 SESSION_END=2
+uint8 BOOTSTRAP_COMPLETE=3
+uint8 WINDOW_START=4
+uint8 WINDOW_END=5
+uint8 SEGMENT_START=6
+uint8 SEGMENT_END=7
+uint8 RECORDER_WARNING=8
+uint8 RECORDER_FAILURE=9
+
+std_msgs/Header header
+uint16 schema_version
+string session_id
+uint64 capture_window_id
+uint64 action_segment_id
+uint8 event_type
+string reason
+bool operator_deadman
+bool gate_stale

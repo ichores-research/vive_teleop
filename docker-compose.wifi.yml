@@ -51,18 +51,65 @@ services:
     network_mode: host
     volumes:
       - ${CYCLONEDDS_HOST_CONFIG:?Run scripts/up-wifi-webrtc.sh or set CYCLONEDDS_HOST_CONFIG}:/tmp/cyclonedds.xml:ro
-      - ./moveit_server/src/vive_moveit_server:/moveit_ws/src/vive_moveit_server
     working_dir: /moveit_ws
     restart: on-failure
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CYCLONEDDS_URI=file:///tmp/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-67}
-      - PYTHONUNBUFFERED=1
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+    ulimits:
+      rtprio:
+        soft: 90
+        hard: 90
+      memlock:
+        soft: -1
+        hard: -1
     command: >
       bash -c "
         ros2 launch vive_moveit_server vive_moveit_server.launch.py ${MOVEIT_SERVER_LAUNCH_ARGS:-}
       "
+
+  data_recorder_wifi:
+    profiles: ["recording"]
+    build:
+      context: ./data_recorder
+      network: host
+    container_name: data_recorder_wifi
+    user: "${VIVE_TELEOP_RECORDING_UID:-1000}:${VIVE_TELEOP_RECORDING_GID:-1000}"
+    init: true
+    stop_grace_period: 30s
+    restart: "no"
+    network_mode: host
+    volumes:
+      - ${CYCLONEDDS_HOST_CONFIG:?Run scripts/up-wifi-webrtc.sh or set CYCLONEDDS_HOST_CONFIG}:/tmp/cyclonedds.xml:ro
+      - ${VIVE_TELEOP_RECORDING_ROOT:-./recordings}:/recordings
+    working_dir: /recorder_ws
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-67}
+      - VIVE_TELEOP_SESSION_ID=${VIVE_TELEOP_SESSION_ID:-manual-session}
+      - HOME=/tmp
+      - ROS_LOG_DIR=/tmp/vive-dataset-recorder-logs
+    command:
+      - ros2
+      - run
+      - vive_dataset_recorder
+      - vive_dataset_recorder
+      - --ros-args
+      - --params-file
+      - /recorder_ws/install/vive_dataset_recorder/share/vive_dataset_recorder/config/recorder.yaml
+      - -p
+      - recording_mode:=${VIVE_TELEOP_RECORDING_MODE:-deadman_window}
+      - -p
+      - post_roll_sec:=${VIVE_TELEOP_RECORDING_POST_ROLL_SEC:-0.75}
+      - -p
+      - capture_gate_stale_timeout_sec:=${VIVE_TELEOP_RECORDING_GATE_TIMEOUT_SEC:-0.25}
+      - -p
+      - minimum_free_space_bytes:=${VIVE_TELEOP_RECORDING_MIN_FREE_BYTES:-20000000000}
 
   coturn_wifi:
     image: coturn/coturn:latest

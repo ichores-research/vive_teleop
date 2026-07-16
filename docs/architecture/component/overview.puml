@@ -38,8 +38,8 @@ note bottom of WebRtcServer
 end note
 
 note bottom of MoveItServer
-  Deadman, timeouts, workspace limits, base guard, Servo,
-  and controller output live here.
+  Deadman, timeouts, workspace limits, prioritized bounded 7-DOF IK,
+  camera-clear null-space posture, base guard, Servo, and controller output live here.
 end note
 
 @enduml

@@ -20,8 +20,7 @@ The folder is organized by diagram type so rendered images stay readable.
 - `class/webrtc_server/webrtc-server.puml`: HTTP signaling, peer lifecycle, ICE config, and route registration internals.
 - `class/webrtc_server/webrtc-input-publisher-node.puml`: data-channel payload parsing and ROS topic publishing.
 - `class/webrtc_server/robot-input-state-node.puml`: live robot state snapshot internals.
-- `class/moveit_server/vive-moveit-server-node.puml`: main teleop control node internals.
-- `class/moveit_server/servo-pose-bridge-node.puml`: Servo pose-to-twist bridge internals.
+- `class/moveit_server/vive-moveit-server-node.puml`: compiled C++ teleop node, Cartesian control math, and real-time setup.
 - `class/unity/unity-client.puml`: Unity client payload, calibration, and WebRTC class structure.
 
 ## Communication

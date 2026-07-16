@@ -24,6 +24,14 @@ export ROS2_DDS_ALLOW_MULTICAST="${ROS2_DDS_ALLOW_MULTICAST:-true}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-67}"
 export TURN_USER="${TURN_USER:-dummy}"
 export TURN_PASSWORD="${TURN_PASSWORD:-dummy}"
+export VIVE_TELEOP_RECORD_DATASET="${VIVE_TELEOP_RECORD_DATASET:-0}"
+export VIVE_TELEOP_RECORDING_ROOT="${VIVE_TELEOP_RECORDING_ROOT:-${repo_dir}/recordings}"
+export VIVE_TELEOP_RECORDING_MODE="${VIVE_TELEOP_RECORDING_MODE:-deadman_window}"
+export VIVE_TELEOP_RECORDING_POST_ROLL_SEC="${VIVE_TELEOP_RECORDING_POST_ROLL_SEC:-0.75}"
+export VIVE_TELEOP_RECORDING_GATE_TIMEOUT_SEC="${VIVE_TELEOP_RECORDING_GATE_TIMEOUT_SEC:-0.25}"
+export VIVE_TELEOP_RECORDING_MIN_FREE_BYTES="${VIVE_TELEOP_RECORDING_MIN_FREE_BYTES:-20000000000}"
+export VIVE_TELEOP_RECORDING_UID="${VIVE_TELEOP_RECORDING_UID:-$(id -u)}"
+export VIVE_TELEOP_RECORDING_GID="${VIVE_TELEOP_RECORDING_GID:-$(id -g)}"
 export WEBRTC_PUBLIC_TURN_URLS="${WEBRTC_PUBLIC_TURN_URLS:-turn:${WEBRTC_HOST_IP}:3478?transport=udp,turn:${WEBRTC_HOST_IP}:3478?transport=tcp}"
 export WEBRTC_TURN_URLS="${WEBRTC_TURN_URLS:-turn:127.0.0.1:3478?transport=udp,turn:127.0.0.1:3478?transport=tcp}"
 
@@ -32,6 +40,15 @@ case "$ROS2_DDS_ALLOW_MULTICAST" in
   *)
     printf 'ROS2_DDS_ALLOW_MULTICAST must be true or false, got: %s\n' \
       "$ROS2_DDS_ALLOW_MULTICAST" >&2
+    exit 1
+    ;;
+esac
+
+case "$VIVE_TELEOP_RECORD_DATASET" in
+  0|1) ;;
+  *)
+    printf 'VIVE_TELEOP_RECORD_DATASET must be 0 or 1, got: %s\n' \
+      "$VIVE_TELEOP_RECORD_DATASET" >&2
     exit 1
     ;;
 esac
@@ -106,9 +123,25 @@ printf 'Client config URL: http://%s:8088/config\n' "$WEBRTC_HOST_IP"
 printf 'Client TURN URLs: %s\n' "$WEBRTC_PUBLIC_TURN_URLS"
 printf 'Server TURN URLs: %s\n' "$WEBRTC_TURN_URLS"
 
+services=(webrtc_server_wifi moveit_server_wifi coturn_wifi)
+if [[ "$VIVE_TELEOP_RECORD_DATASET" == "1" ]]; then
+  if [[ -z "${VIVE_TELEOP_SESSION_ID:-}" ]]; then
+    VIVE_TELEOP_SESSION_ID="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+    export VIVE_TELEOP_SESSION_ID
+  fi
+  mkdir -p "$VIVE_TELEOP_RECORDING_ROOT"
+  if [[ ! -w "$VIVE_TELEOP_RECORDING_ROOT" ]]; then
+    printf 'Recording root is not writable: %s\n' "$VIVE_TELEOP_RECORDING_ROOT" >&2
+    exit 1
+  fi
+  printf 'Dataset recording session: %s\n' "$VIVE_TELEOP_SESSION_ID"
+  printf 'Dataset recording root: %s\n' "$VIVE_TELEOP_RECORDING_ROOT"
+  services+=(data_recorder_wifi)
+fi
+
 cd "$repo_dir"
 docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
-  webrtc_server moveit_server coturn >/dev/null 2>&1 || true
+  webrtc_server moveit_server data_recorder coturn >/dev/null 2>&1 || true
 
 exec docker compose -f docker-compose.yml -f docker-compose.wifi.yml up --build --remove-orphans "$@" \
-  webrtc_server_wifi moveit_server_wifi coturn_wifi
+  "${services[@]}"
