@@ -20,7 +20,8 @@ package "Input topics" {
 package "moveit_server container" {
   component "ViveMoveItServer\nC++ rclcpp" as Teleop
   component "100 Hz Cartesian loop\nfilter + feedback/feed-forward\nspeed/acceleration limits" as ArmLoop
-  component "MoveIt Servo component\nintra-process enabled\n7-DOF differential IK" as Servo
+  component "Prioritized orientation-first 7-DOF IK\nJ7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1\nper-joint bounded fallback" as IK
+  component "MoveIt Servo component\nintra-process enabled\njoint safety + smoothing" as Servo
   component "move_group" as MoveGroup
   component "robot_state_publisher" as Rsp
 }
@@ -37,6 +38,8 @@ package "Command and observability topics" {
   queue "/servo_node/pose_target_cmds\n(mapped target)" as PoseTarget
   queue "/servo_node/pose_target_active\n(effective gate)" as PoseActive
   queue "/servo_node/delta_twist_cmds" as DeltaTwist
+  queue "/servo_node/delta_joint_cmds" as DeltaJoint
+  queue "/servo_node/status" as ServoStatus
   queue "/arm_controller/joint_trajectory" as ArmCommand
 }
 
@@ -48,24 +51,42 @@ BaseInput --> Teleop
 BaseActive --> Teleop
 
 JointStates --> Teleop : gripper state
+JointStates --> IK : torso + seven arm positions
 Tf --> ArmLoop : fresh tool pose
 Teleop *-- ArmLoop : same process\nlatest-value state
+Teleop *-- IK : same process\nKDL chain
 Teleop --> HeadCommand
 Teleop --> GripperCommand
 Teleop --> BaseCommand
 ArmLoop --> PoseTarget : diagnostics / recording
 ArmLoop --> PoseActive : effective gate
 ArmLoop --> DeltaTwist : physical speed_units
+DeltaTwist --> IK : Cartesian task
+IK --> DeltaJoint : seven physical joint velocities
 
+Rsp --> IK : robot_description
 Rsp --> MoveGroup : robot_description + TF
 MoveGroup --> Servo : planning scene/model
 JointStates --> Servo : seven arm joints
-DeltaTwist --> Servo
+DeltaJoint --> Servo
+Servo --> ServoStatus
+ServoStatus --> Teleop : joint-bound recovery
 Servo --> ArmCommand
 
 note bottom of ArmLoop
   Deadman clutch maps the configured controller-top local frame
   to arm_tool_link. Translation remains base_footprint aligned.
+end note
+
+note bottom of IK
+  Rotation is primary; translation uses its null space.
+  Upward middle-arm links receive camera-clear penalties;
+  the elbow receives a bounded low-enough target.
+  Both act in the safe Cartesian null space and yield near
+  singularities or protected joint margins.
+  Constrained joints saturate locally; residual motion
+  falls through the hierarchy. Servo bound status triggers
+  inward-only recovery and target rebasing.
 end note
 
 @enduml

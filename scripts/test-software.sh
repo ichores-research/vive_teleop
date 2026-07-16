@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
 ros_test_image="${ROS_TEST_IMAGE:-ros:humble}"
+compose_test_project="${COMPOSE_TEST_PROJECT_NAME:-vive_teleop_test}"
 
 usage() {
   cat <<'EOF'
@@ -60,25 +61,15 @@ if [[ "$run_ros" == "true" ]]; then
     WEBRTC_PUBLIC_TURN_URLS='turn:192.0.2.10:3478?transport=udp' \
     ROS_FIELD_HOST_IP=192.0.2.20 \
     docker compose \
+      --project-name "$compose_test_project" \
       -f "$repo_dir/docker-compose.yml" \
       -f "$repo_dir/docker-compose.wifi.yml" \
       build
 
   printf '%s\n' 'Docker Compose images built successfully.'
 
-  moveit_test_image="$(
-    env \
-      CYCLONEDDS_HOST_CONFIG=/tmp/vive-teleop-ci-cyclonedds.xml \
-      WEBRTC_TURN_URLS='turn:127.0.0.1:3478?transport=udp' \
-      WEBRTC_HOST_IP=192.0.2.10 \
-      WEBRTC_PUBLIC_TURN_URLS='turn:192.0.2.10:3478?transport=udp' \
-      ROS_FIELD_HOST_IP=192.0.2.20 \
-      docker compose \
-        -f "$repo_dir/docker-compose.yml" \
-        -f "$repo_dir/docker-compose.wifi.yml" \
-        images -q moveit_server
-  )"
-  if [[ -z "$moveit_test_image" ]]; then
+  moveit_test_image="${compose_test_project}-moveit_server:latest"
+  if ! docker image inspect "$moveit_test_image" >/dev/null 2>&1; then
     printf '%s\n' 'Could not resolve the built MoveIt server image.' >&2
     exit 1
   fi

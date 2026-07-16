@@ -10,9 +10,12 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <depend>control_msgs</depend>
   <depend>eigen</depend>
   <depend>geometry_msgs</depend>
+  <depend>kdl_parser</depend>
   <depend>moveit_servo</depend>
+  <depend>orocos_kdl</depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
@@ -20,6 +23,7 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>trajectory_msgs</depend>
+  <depend>urdf</depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

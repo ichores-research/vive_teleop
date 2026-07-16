@@ -55,7 +55,7 @@ TfTree --> WebRtcServer : wrist/head snapshot TF
 JointStates --> MoveItServer : robot state
 TfTree --> MoveItServer : wrist anchor/current pose
 MoveItServer --> HeadController : head trajectory
-MoveItServer --> ArmController : Servo output trajectory
+MoveItServer --> ArmController : prioritized bounded IK -> Servo trajectory
 MoveItServer --> GripperController : gripper trajectory
 
 note bottom of Docker

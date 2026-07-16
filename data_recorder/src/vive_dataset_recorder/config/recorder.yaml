@@ -40,6 +40,7 @@ vive_dataset_recorder:
       - /servo_node/pose_target_active
       - /servo_node/pose_target_cmds
       - /servo_node/delta_twist_cmds
+      - /servo_node/delta_joint_cmds
       - /servo_node/status
       - /arm_controller/joint_trajectory
       - /head_controller/joint_trajectory

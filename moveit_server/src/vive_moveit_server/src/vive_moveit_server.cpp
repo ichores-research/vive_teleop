@@ -1,15 +1,27 @@
 #include "vive_moveit_server/control_math.hpp"
+#include "vive_moveit_server/redundant_ik.hpp"
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <Eigen/SVD>
 
+#include <control_msgs/msg/joint_jog.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <kdl/chain.hpp>
+#include <kdl/chainfksolverpos_recursive.hpp>
+#include <kdl/chainjnttojacsolver.hpp>
+#include <kdl/jacobian.hpp>
+#include <kdl/jntarray.hpp>
+#include <kdl_parser/kdl_parser.hpp>
+#include <moveit_servo/status_codes.h>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/int8.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
@@ -17,6 +29,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
+#include <urdf/model.h>
 
 #include <pthread.h>
 #include <sched.h>
@@ -96,6 +109,17 @@ double clamp(double value, double lower, double upper)
   return std::max(lower, std::min(upper, value));
 }
 
+double smoothRamp(double value, double zero_at, double one_at)
+{
+  if (!std::isfinite(value) || !std::isfinite(zero_at) ||
+      !std::isfinite(one_at) || one_at <= zero_at) {
+    return 0.0;
+  }
+  const double normalized = clamp(
+    (value - zero_at) / (one_at - zero_at), 0.0, 1.0);
+  return normalized * normalized * (3.0 - 2.0 * normalized);
+}
+
 struct RealtimeResult
 {
   bool scheduling_active{ false };
@@ -128,8 +152,18 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "C++ teleop ready: 6-DoF arm loop %.1f Hz, Servo group '%s', tool '%s'",
-      arm_control_rate_hz_, arm_group_.c_str(), end_effector_link_.c_str());
+      "C++ teleop ready: 6-DoF arm loop %.1f Hz, prioritized orientation-first "
+      "7-DOF IK J7->J6->J5->J3->J2->J4->J1 at %.0f%% URDF velocity, "
+      "group '%s', tool '%s'",
+      arm_control_rate_hz_, 100.0 * ik_options_.joint_velocity_scale,
+      arm_group_.c_str(), end_effector_link_.c_str());
+    RCLCPP_INFO(
+      get_logger(),
+      "Fast-follow profile: gains %.1f/%.1f, caps %.2f m/s and %.2f rad/s, "
+      "acceleration %.1f m/s^2 and %.1f rad/s^2, target filter %.1f Hz",
+      linear_gain_, angular_gain_, max_linear_velocity_mps_,
+      max_angular_velocity_radps_, max_linear_acceleration_mps2_,
+      max_angular_acceleration_radps2_, target_filter_cutoff_hz_);
     RCLCPP_INFO(
       get_logger(),
       "Controller top frame is clutch-mapped to the tool frame; alignment RPY "
@@ -201,6 +235,35 @@ private:
       return Eigen::Vector3d(defaults[0], defaults[1], defaults[2]);
     }
     return Eigen::Vector3d(values[0], values[1], values[2]);
+  }
+
+  Eigen::VectorXd declareJointVector(
+    const std::string& name,
+    const std::array<double, 7>& defaults,
+    bool require_positive)
+  {
+    const auto values = declare_parameter<std::vector<double>>(
+      name, std::vector<double>(defaults.begin(), defaults.end()));
+    const bool valid = values.size() == defaults.size() &&
+      std::all_of(values.begin(), values.end(), [require_positive](double value) {
+        return std::isfinite(value) &&
+          (require_positive ? value > 0.0 : value >= 0.0);
+      });
+    Eigen::VectorXd result(defaults.size());
+    if (!valid) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Parameter '%s' must contain seven finite %s values; using defaults",
+        name.c_str(), require_positive ? "positive" : "nonnegative");
+      for (std::size_t index = 0; index < defaults.size(); ++index) {
+        result[static_cast<Eigen::Index>(index)] = defaults[index];
+      }
+      return result;
+    }
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      result[static_cast<Eigen::Index>(index)] = values[index];
+    }
+    return result;
   }
 
   std::array<double, 2> declarePair(
@@ -292,13 +355,19 @@ private:
       "base_command_frame", "base_footprint");
     joint_state_topic_ = declare_parameter<std::string>(
       "joint_state_topic", "/joint_states");
+    robot_description_topic_ = declare_parameter<std::string>(
+      "robot_description_topic", "/robot_description");
 
     servo_twist_topic_ = declare_parameter<std::string>(
       "servo_twist_topic", "/servo_node/delta_twist_cmds");
+    servo_joint_topic_ = declare_parameter<std::string>(
+      "servo_joint_topic", "/servo_node/delta_joint_cmds");
     servo_pose_target_topic_ = declare_parameter<std::string>(
       "servo_pose_target_topic", "/servo_node/pose_target_cmds");
     servo_pose_active_topic_ = declare_parameter<std::string>(
       "servo_pose_active_topic", "/servo_node/pose_target_active");
+    servo_status_topic_ = declare_parameter<std::string>(
+      "servo_status_topic", "/servo_node/status");
     servo_start_service_ = declare_parameter<std::string>(
       "servo_start_service", "/servo_node/start_servo");
 
@@ -312,6 +381,92 @@ private:
       "require_deadman_repress_after_timeout", true);
     arm_halt_command_count_ = declare_parameter<int>(
       "arm_halt_command_count", 4);
+    const std::vector<std::string> default_arm_joint_names{
+      "arm_1_joint", "arm_2_joint", "arm_3_joint", "arm_4_joint",
+      "arm_5_joint", "arm_6_joint", "arm_7_joint"
+    };
+    arm_joint_names_ = declare_parameter<std::vector<std::string>>(
+      "arm_joint_names", default_arm_joint_names);
+    if (arm_joint_names_ != default_arm_joint_names) {
+      RCLCPP_WARN(
+        get_logger(),
+        "arm_joint_names must be ordered arm_1_joint through arm_7_joint; "
+        "using defaults");
+      arm_joint_names_ = default_arm_joint_names;
+    }
+
+    ik_options_.damping_threshold = declare_parameter<double>(
+      "ik_damping_threshold", 0.08);
+    ik_options_.maximum_damping = declare_parameter<double>(
+      "ik_maximum_damping", 0.08);
+    ik_options_.joint_motion_weights = declareJointVector(
+      "ik_joint_motion_weights", { 12.0, 3.0, 2.0, 4.0, 1.0, 0.5, 0.25 }, true);
+    ik_options_.joint_limit_activation_ratio = declare_parameter<double>(
+      "ik_joint_limit_activation_ratio", 0.65);
+    ik_options_.joint_limit_weight = declare_parameter<double>(
+      "ik_joint_limit_weight", 40.0);
+    ik_options_.joint_centering_gain = declare_parameter<double>(
+      "ik_joint_centering_gain_radps", 0.35);
+    ik_options_.maximum_secondary_velocity = declare_parameter<double>(
+      "ik_maximum_secondary_velocity_radps", 0.40);
+    ik_options_.joint_velocity_scale = declare_parameter<double>(
+      "ik_joint_velocity_scale", 0.95);
+    ik_options_.joint_limit_margins = declareJointVector(
+      "ik_joint_limit_margins_rad", { 0.14, 0.18, 0.14, 0.20, 0.24, 0.24, 0.24 }, false);
+    ik_options_.joint_limit_margin = declare_parameter<double>(
+      "ik_joint_limit_margin_rad", 0.08);
+    ik_options_.joint_limit_lookahead = declare_parameter<double>(
+      "ik_joint_limit_lookahead_sec", 0.45);
+    singularity_avoidance_threshold_ = declare_parameter<double>(
+      "ik_singularity_avoidance_threshold", 0.10);
+    singularity_escape_velocity_radps_ = declare_parameter<double>(
+      "ik_singularity_escape_velocity_radps", 0.30);
+    singularity_gradient_step_rad_ = declare_parameter<double>(
+      "ik_singularity_gradient_step_rad", 0.01);
+    visibility_avoidance_enabled_ = declare_parameter<bool>(
+      "ik_visibility_avoidance_enabled", true);
+    visibility_link_names_ = declare_parameter<std::vector<std::string>>(
+      "ik_visibility_link_names",
+      { "arm_3_link", "arm_4_link", "arm_5_link" });
+    if (visibility_link_names_.size() < 2) {
+      RCLCPP_WARN(
+        get_logger(),
+        "ik_visibility_link_names needs at least two links; using TIAGo "
+        "middle-arm defaults");
+      visibility_link_names_ = {
+        "arm_3_link", "arm_4_link", "arm_5_link"
+      };
+    }
+    visibility_upward_activation_ratio_ = declare_parameter<double>(
+      "ik_visibility_upward_activation_ratio", 0.10);
+    visibility_avoidance_velocity_radps_ = declare_parameter<double>(
+      "ik_visibility_avoidance_velocity_radps", 0.20);
+    visibility_low_elbow_reward_weight_ = declare_parameter<double>(
+      "ik_visibility_low_elbow_reward_weight", 0.40);
+    visibility_low_elbow_target_slope_ = declare_parameter<double>(
+      "ik_visibility_low_elbow_target_slope", -0.20);
+    visibility_gradient_step_rad_ = declare_parameter<double>(
+      "ik_visibility_gradient_step_rad", 0.01);
+    visibility_singularity_disable_threshold_ = declare_parameter<double>(
+      "ik_visibility_singularity_disable_threshold", 0.04);
+    visibility_singularity_full_threshold_ = declare_parameter<double>(
+      "ik_visibility_singularity_full_threshold", 0.08);
+    visibility_joint_margin_disable_buffer_rad_ = declare_parameter<double>(
+      "ik_visibility_joint_margin_disable_buffer_rad", 0.04);
+    visibility_joint_margin_full_buffer_rad_ = declare_parameter<double>(
+      "ik_visibility_joint_margin_full_buffer_rad", 0.15);
+    joint_limit_recovery_velocity_radps_ = declare_parameter<double>(
+      "joint_limit_recovery_velocity_radps", 0.18);
+    joint_limit_recovery_gain_ = declare_parameter<double>(
+      "joint_limit_recovery_gain", 2.0);
+    joint_limit_recovery_release_buffer_rad_ = declare_parameter<double>(
+      "joint_limit_recovery_release_buffer_rad", 0.03);
+    unreachable_linear_residual_mps_ = declare_parameter<double>(
+      "ik_unreachable_linear_residual_mps", 0.20);
+    unreachable_timeout_sec_ = declare_parameter<double>(
+      "ik_unreachable_timeout_sec", 0.50);
+    declare_parameter<bool>("ik_model_ready", false);
+    declare_parameter<bool>("ik_visibility_model_ready", false);
 
     max_hand_target_distance_m_ = declare_parameter<double>(
       "max_hand_target_distance_m", 1.5);
@@ -327,28 +482,28 @@ private:
       "controller_to_tool_rotation_rpy_rad", { 0.0, 0.0, 0.0 });
     controller_to_tool_rotation_ = quaternionFromRpy(controller_to_tool_rpy_);
 
-    linear_gain_ = declare_parameter<double>("linear_gain", 5.0);
-    angular_gain_ = declare_parameter<double>("angular_gain", 2.5);
+    linear_gain_ = declare_parameter<double>("linear_gain", 7.0);
+    angular_gain_ = declare_parameter<double>("angular_gain", 4.0);
     max_linear_velocity_mps_ = declare_parameter<double>(
-      "max_linear_velocity_mps", 0.35);
+      "max_linear_velocity_mps", 0.45);
     max_angular_velocity_radps_ = declare_parameter<double>(
-      "max_angular_velocity_radps", 1.20);
+      "max_angular_velocity_radps", 1.60);
     max_linear_acceleration_mps2_ = declare_parameter<double>(
-      "max_linear_acceleration_mps2", 2.0);
+      "max_linear_acceleration_mps2", 4.0);
     max_angular_acceleration_radps2_ = declare_parameter<double>(
-      "max_angular_acceleration_radps2", 6.0);
+      "max_angular_acceleration_radps2", 10.0);
     position_deadband_m_ = declare_parameter<double>(
       "position_deadband_m", 0.0005);
     orientation_deadband_rad_ = declare_parameter<double>(
       "orientation_deadband_rad", 0.003);
     target_filter_cutoff_hz_ = declare_parameter<double>(
-      "target_filter_cutoff_hz", 12.0);
+      "target_filter_cutoff_hz", 20.0);
     linear_feedforward_gain_ = declare_parameter<double>(
       "linear_feedforward_gain", 1.0);
     angular_feedforward_gain_ = declare_parameter<double>(
       "angular_feedforward_gain", 1.0);
     feedforward_filter_alpha_ = declare_parameter<double>(
-      "feedforward_filter_alpha", 0.35);
+      "feedforward_filter_alpha", 0.55);
     feedforward_timeout_sec_ = declare_parameter<double>(
       "feedforward_timeout_sec", 0.05);
     feedforward_reset_gap_sec_ = declare_parameter<double>(
@@ -448,28 +603,28 @@ private:
       min_hand_target_z_m_ = 0.2;
       max_hand_target_z_m_ = 1.6;
     }
-    linear_gain_ = nonnegativeOrDefault("linear_gain", linear_gain_, 5.0);
-    angular_gain_ = nonnegativeOrDefault("angular_gain", angular_gain_, 2.5);
+    linear_gain_ = nonnegativeOrDefault("linear_gain", linear_gain_, 7.0);
+    angular_gain_ = nonnegativeOrDefault("angular_gain", angular_gain_, 4.0);
     max_linear_velocity_mps_ = positiveOrDefault(
-      "max_linear_velocity_mps", max_linear_velocity_mps_, 0.35);
+      "max_linear_velocity_mps", max_linear_velocity_mps_, 0.45);
     max_angular_velocity_radps_ = positiveOrDefault(
-      "max_angular_velocity_radps", max_angular_velocity_radps_, 1.2);
+      "max_angular_velocity_radps", max_angular_velocity_radps_, 1.6);
     max_linear_acceleration_mps2_ = positiveOrDefault(
-      "max_linear_acceleration_mps2", max_linear_acceleration_mps2_, 2.0);
+      "max_linear_acceleration_mps2", max_linear_acceleration_mps2_, 4.0);
     max_angular_acceleration_radps2_ = positiveOrDefault(
-      "max_angular_acceleration_radps2", max_angular_acceleration_radps2_, 6.0);
+      "max_angular_acceleration_radps2", max_angular_acceleration_radps2_, 10.0);
     position_deadband_m_ = nonnegativeOrDefault(
       "position_deadband_m", position_deadband_m_, 0.0005);
     orientation_deadband_rad_ = nonnegativeOrDefault(
       "orientation_deadband_rad", orientation_deadband_rad_, 0.003);
     target_filter_cutoff_hz_ = nonnegativeOrDefault(
-      "target_filter_cutoff_hz", target_filter_cutoff_hz_, 12.0);
+      "target_filter_cutoff_hz", target_filter_cutoff_hz_, 20.0);
     linear_feedforward_gain_ = nonnegativeOrDefault(
       "linear_feedforward_gain", linear_feedforward_gain_, 1.0);
     angular_feedforward_gain_ = nonnegativeOrDefault(
       "angular_feedforward_gain", angular_feedforward_gain_, 1.0);
     feedforward_filter_alpha_ = finiteOrDefault(
-      "feedforward_filter_alpha", feedforward_filter_alpha_, 0.35);
+      "feedforward_filter_alpha", feedforward_filter_alpha_, 0.55);
     feedforward_timeout_sec_ = nonnegativeOrDefault(
       "feedforward_timeout_sec", feedforward_timeout_sec_, 0.05);
     feedforward_reset_gap_sec_ = nonnegativeOrDefault(
@@ -480,6 +635,127 @@ private:
     angular_feedforward_stop_velocity_radps_ = nonnegativeOrDefault(
       "angular_feedforward_stop_velocity_radps",
       angular_feedforward_stop_velocity_radps_, 0.02);
+    ik_options_.damping_threshold = nonnegativeOrDefault(
+      "ik_damping_threshold", ik_options_.damping_threshold, 0.08);
+    ik_options_.maximum_damping = nonnegativeOrDefault(
+      "ik_maximum_damping", ik_options_.maximum_damping, 0.08);
+    ik_options_.joint_limit_activation_ratio = clamp(
+      finiteOrDefault(
+        "ik_joint_limit_activation_ratio",
+        ik_options_.joint_limit_activation_ratio,
+        0.65),
+      0.0,
+      0.95);
+    ik_options_.joint_limit_weight = nonnegativeOrDefault(
+      "ik_joint_limit_weight", ik_options_.joint_limit_weight, 40.0);
+    ik_options_.joint_centering_gain = nonnegativeOrDefault(
+      "ik_joint_centering_gain_radps",
+      ik_options_.joint_centering_gain,
+      0.35);
+    ik_options_.maximum_secondary_velocity = nonnegativeOrDefault(
+      "ik_maximum_secondary_velocity_radps",
+      ik_options_.maximum_secondary_velocity,
+      0.40);
+    ik_options_.joint_velocity_scale = clamp(
+      positiveOrDefault(
+        "ik_joint_velocity_scale", ik_options_.joint_velocity_scale, 0.95),
+      0.01,
+      1.0);
+    ik_options_.joint_limit_margin = nonnegativeOrDefault(
+      "ik_joint_limit_margin_rad", ik_options_.joint_limit_margin, 0.08);
+    ik_options_.joint_limit_lookahead = positiveOrDefault(
+      "ik_joint_limit_lookahead_sec",
+      ik_options_.joint_limit_lookahead,
+      0.45);
+    singularity_avoidance_threshold_ = nonnegativeOrDefault(
+      "ik_singularity_avoidance_threshold",
+      singularity_avoidance_threshold_,
+      0.10);
+    singularity_escape_velocity_radps_ = nonnegativeOrDefault(
+      "ik_singularity_escape_velocity_radps",
+      singularity_escape_velocity_radps_,
+      0.30);
+    singularity_gradient_step_rad_ = positiveOrDefault(
+      "ik_singularity_gradient_step_rad",
+      singularity_gradient_step_rad_,
+      0.01);
+    visibility_upward_activation_ratio_ = clamp(
+      finiteOrDefault(
+        "ik_visibility_upward_activation_ratio",
+        visibility_upward_activation_ratio_,
+        0.10),
+      0.0,
+      0.95);
+    visibility_avoidance_velocity_radps_ = nonnegativeOrDefault(
+      "ik_visibility_avoidance_velocity_radps",
+      visibility_avoidance_velocity_radps_,
+      0.20);
+    visibility_low_elbow_reward_weight_ = clamp(
+      finiteOrDefault(
+        "ik_visibility_low_elbow_reward_weight",
+        visibility_low_elbow_reward_weight_,
+        0.40),
+      0.0,
+      1.0);
+    visibility_low_elbow_target_slope_ = clamp(
+      finiteOrDefault(
+        "ik_visibility_low_elbow_target_slope",
+        visibility_low_elbow_target_slope_,
+        -0.20),
+      -1.0,
+      std::max(-0.999, visibility_upward_activation_ratio_ - 1e-3));
+    visibility_gradient_step_rad_ = positiveOrDefault(
+      "ik_visibility_gradient_step_rad",
+      visibility_gradient_step_rad_,
+      0.01);
+    visibility_singularity_disable_threshold_ = nonnegativeOrDefault(
+      "ik_visibility_singularity_disable_threshold",
+      visibility_singularity_disable_threshold_,
+      0.04);
+    visibility_singularity_full_threshold_ = positiveOrDefault(
+      "ik_visibility_singularity_full_threshold",
+      visibility_singularity_full_threshold_,
+      0.08);
+    if (visibility_singularity_full_threshold_ <=
+        visibility_singularity_disable_threshold_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Visibility singularity thresholds must increase; using 0.04/0.08");
+      visibility_singularity_disable_threshold_ = 0.04;
+      visibility_singularity_full_threshold_ = 0.08;
+    }
+    visibility_joint_margin_disable_buffer_rad_ = nonnegativeOrDefault(
+      "ik_visibility_joint_margin_disable_buffer_rad",
+      visibility_joint_margin_disable_buffer_rad_,
+      0.04);
+    visibility_joint_margin_full_buffer_rad_ = positiveOrDefault(
+      "ik_visibility_joint_margin_full_buffer_rad",
+      visibility_joint_margin_full_buffer_rad_,
+      0.15);
+    if (visibility_joint_margin_full_buffer_rad_ <=
+        visibility_joint_margin_disable_buffer_rad_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Visibility joint-margin buffers must increase; using 0.04/0.15 rad");
+      visibility_joint_margin_disable_buffer_rad_ = 0.04;
+      visibility_joint_margin_full_buffer_rad_ = 0.15;
+    }
+    joint_limit_recovery_velocity_radps_ = positiveOrDefault(
+      "joint_limit_recovery_velocity_radps",
+      joint_limit_recovery_velocity_radps_,
+      0.18);
+    joint_limit_recovery_gain_ = positiveOrDefault(
+      "joint_limit_recovery_gain", joint_limit_recovery_gain_, 2.0);
+    joint_limit_recovery_release_buffer_rad_ = nonnegativeOrDefault(
+      "joint_limit_recovery_release_buffer_rad",
+      joint_limit_recovery_release_buffer_rad_,
+      0.03);
+    unreachable_linear_residual_mps_ = positiveOrDefault(
+      "ik_unreachable_linear_residual_mps",
+      unreachable_linear_residual_mps_,
+      0.20);
+    unreachable_timeout_sec_ = positiveOrDefault(
+      "ik_unreachable_timeout_sec", unreachable_timeout_sec_, 0.50);
     head_publish_rate_hz_ = std::max(1.0, head_publish_rate_hz_);
     base_publish_rate_hz_ = std::max(1.0, base_publish_rate_hz_);
     arm_halt_command_count_ = std::max(1, arm_halt_command_count_);
@@ -507,6 +783,8 @@ private:
       base_command_topic_, rclcpp::QoS(10));
     servo_twist_publisher_ = create_publisher<geometry_msgs::msg::TwistStamped>(
       servo_twist_topic_, command_qos);
+    servo_joint_publisher_ = create_publisher<control_msgs::msg::JointJog>(
+      servo_joint_topic_, command_qos);
     servo_pose_target_publisher_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       servo_pose_target_topic_, rclcpp::QoS(10));
     servo_pose_active_publisher_ = create_publisher<std_msgs::msg::Bool>(
@@ -540,6 +818,20 @@ private:
       joint_state_topic_,
       rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ViveMoveItServer::onJointState, this, std::placeholders::_1));
+    robot_description_subscription_ = create_subscription<std_msgs::msg::String>(
+      robot_description_topic_,
+      rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
+      std::bind(
+        &ViveMoveItServer::onRobotDescription,
+        this,
+        std::placeholders::_1));
+    servo_status_subscription_ = create_subscription<std_msgs::msg::Int8>(
+      servo_status_topic_,
+      rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile(),
+      std::bind(
+        &ViveMoveItServer::onServoStatus,
+        this,
+        std::placeholders::_1));
 
     servo_start_client_ = create_client<std_srvs::srv::Trigger>(servo_start_service_);
   }
@@ -620,6 +912,640 @@ private:
     if (received_valid) {
       last_joint_state_received_ = SteadyClock::now();
     }
+  }
+
+  void onServoStatus(const std_msgs::msg::Int8::SharedPtr message)
+  {
+    const auto status = static_cast<moveit_servo::StatusCode>(message->data);
+    if (status != moveit_servo::StatusCode::JOINT_BOUND ||
+        !arm_tracking_ || !arm_requested_) {
+      return;
+    }
+    if (!joint_limit_recovery_active_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "MoveIt Servo reported a joint bound; suspending Cartesian and "
+        "low-elbow pursuit for inward joint recovery");
+      publishArmActive(false);
+    }
+    joint_limit_recovery_active_ = true;
+    unreachable_residual_since_ = SteadyTime{};
+    target_linear_velocity_.setZero();
+    target_angular_velocity_.setZero();
+    last_linear_command_.setZero();
+    last_angular_command_.setZero();
+  }
+
+  void onRobotDescription(const std_msgs::msg::String::SharedPtr message)
+  {
+    if (ik_model_ready_ || message->data.empty()) {
+      return;
+    }
+
+    urdf::Model robot_model;
+    if (!robot_model.initString(message->data)) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Could not parse /robot_description for redundant IK");
+      return;
+    }
+
+    KDL::Tree tree;
+    KDL::Chain chain;
+    if (!kdl_parser::treeFromUrdfModel(robot_model, tree) ||
+        !tree.getChain(planning_frame_, end_effector_link_, chain)) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Could not build KDL chain '%s' -> '%s'",
+        planning_frame_.c_str(), end_effector_link_.c_str());
+      return;
+    }
+
+    std::vector<std::string> chain_joint_names;
+    chain_joint_names.reserve(chain.getNrOfJoints());
+    for (const auto& segment : chain.segments) {
+      const KDL::Joint& joint = segment.getJoint();
+      if (joint.getType() != KDL::Joint::None) {
+        chain_joint_names.push_back(joint.getName());
+      }
+    }
+    if (chain_joint_names.size() != chain.getNrOfJoints()) {
+      RCLCPP_ERROR(
+        get_logger(), "KDL chain joint indexing is internally inconsistent");
+      return;
+    }
+
+    std::vector<std::size_t> arm_chain_indices;
+    Eigen::VectorXd lower_limits(arm_joint_names_.size());
+    Eigen::VectorXd upper_limits(arm_joint_names_.size());
+    Eigen::VectorXd velocity_limits(arm_joint_names_.size());
+    for (std::size_t arm_index = 0;
+         arm_index < arm_joint_names_.size(); ++arm_index) {
+      const auto chain_joint = std::find(
+        chain_joint_names.begin(),
+        chain_joint_names.end(),
+        arm_joint_names_[arm_index]);
+      if (chain_joint == chain_joint_names.end()) {
+        RCLCPP_ERROR(
+          get_logger(),
+          "KDL chain is missing required joint '%s'",
+          arm_joint_names_[arm_index].c_str());
+        return;
+      }
+      const auto joint = robot_model.getJoint(arm_joint_names_[arm_index]);
+      if (!joint || !joint->limits ||
+          !std::isfinite(joint->limits->lower) ||
+          !std::isfinite(joint->limits->upper) ||
+          !std::isfinite(joint->limits->velocity) ||
+          joint->limits->upper <= joint->limits->lower ||
+          joint->limits->velocity <= 0.0) {
+        RCLCPP_ERROR(
+          get_logger(),
+          "Joint '%s' needs finite position and velocity limits for IK",
+          arm_joint_names_[arm_index].c_str());
+        return;
+      }
+      arm_chain_indices.push_back(static_cast<std::size_t>(
+        std::distance(chain_joint_names.begin(), chain_joint)));
+      lower_limits[arm_index] = joint->limits->lower;
+      upper_limits[arm_index] = joint->limits->upper;
+      velocity_limits[arm_index] = joint->limits->velocity;
+      const double recovery_band = jointLimitMargin(arm_index) +
+        joint_limit_recovery_release_buffer_rad_;
+      if (joint->limits->upper - joint->limits->lower <=
+          2.0 * recovery_band) {
+        RCLCPP_ERROR(
+          get_logger(),
+          "Joint '%s' range is too small for its protected margin and "
+          "recovery buffer",
+          arm_joint_names_[arm_index].c_str());
+        return;
+      }
+    }
+
+    std::vector<int> visibility_link_segment_numbers;
+    if (visibility_avoidance_enabled_) {
+      visibility_link_segment_numbers.reserve(visibility_link_names_.size());
+      for (const std::string& link_name : visibility_link_names_) {
+        const auto segment = std::find_if(
+          chain.segments.begin(),
+          chain.segments.end(),
+          [&link_name](const KDL::Segment& candidate) {
+            return candidate.getName() == link_name;
+          });
+        if (segment == chain.segments.end()) {
+          RCLCPP_ERROR(
+            get_logger(),
+            "KDL chain is missing visibility link '%s'; middle-arm "
+            "visibility avoidance is unavailable",
+            link_name.c_str());
+          visibility_link_segment_numbers.clear();
+          break;
+        }
+        visibility_link_segment_numbers.push_back(
+          static_cast<int>(
+            std::distance(chain.segments.begin(), segment)) + 1);
+      }
+    }
+
+    ik_chain_ = std::move(chain);
+    chain_joint_names_ = std::move(chain_joint_names);
+    arm_chain_indices_ = std::move(arm_chain_indices);
+    arm_lower_limits_ = std::move(lower_limits);
+    arm_upper_limits_ = std::move(upper_limits);
+    arm_velocity_limits_ = std::move(velocity_limits);
+    jacobian_solver_ = std::make_unique<KDL::ChainJntToJacSolver>(ik_chain_);
+    fk_solver_ = std::make_unique<KDL::ChainFkSolverPos_recursive>(ik_chain_);
+    visibility_link_segment_numbers_ =
+      std::move(visibility_link_segment_numbers);
+    visibility_model_ready_ = !visibility_avoidance_enabled_ ||
+      visibility_link_segment_numbers_.size() == visibility_link_names_.size();
+    ik_model_ready_ = true;
+    set_parameter(rclcpp::Parameter("ik_model_ready", true));
+    set_parameter(rclcpp::Parameter(
+      "ik_visibility_model_ready", visibility_model_ready_));
+    RCLCPP_INFO(
+      get_logger(),
+      "Redundant IK ready: %zu controlled arm joints in a %u-joint KDL chain",
+      arm_joint_names_.size(), ik_chain_.getNrOfJoints());
+    if (visibility_avoidance_enabled_ && visibility_model_ready_) {
+      RCLCPP_INFO(
+        get_logger(),
+        "Middle-arm visibility avoidance ready across %zu segments; upward "
+        "slope activation %.2f, low-elbow target %.2f, maximum correction "
+        "%.2f rad/s, low-elbow gain %.2f",
+        visibility_link_segment_numbers_.size() - 1,
+        visibility_upward_activation_ratio_,
+        visibility_low_elbow_target_slope_,
+        visibility_avoidance_velocity_radps_,
+        visibility_low_elbow_reward_weight_);
+    }
+  }
+
+  bool currentIkPositions(
+    Eigen::VectorXd& chain_position,
+    Eigen::VectorXd& arm_position) const
+  {
+    if (!ik_model_ready_ || !jacobian_solver_) {
+      return false;
+    }
+    chain_position.resize(chain_joint_names_.size());
+    for (std::size_t index = 0; index < chain_joint_names_.size(); ++index) {
+      const auto position = joint_positions_.find(chain_joint_names_[index]);
+      if (position == joint_positions_.end() || !std::isfinite(position->second)) {
+        return false;
+      }
+      chain_position[index] = position->second;
+    }
+    arm_position.resize(arm_chain_indices_.size());
+    for (std::size_t index = 0; index < arm_chain_indices_.size(); ++index) {
+      arm_position[index] = chain_position[arm_chain_indices_[index]];
+    }
+    return true;
+  }
+
+  bool armJacobian(
+    const Eigen::VectorXd& chain_position,
+    Eigen::MatrixXd& jacobian) const
+  {
+    if (!jacobian_solver_ ||
+        chain_position.size() != static_cast<Eigen::Index>(ik_chain_.getNrOfJoints())) {
+      return false;
+    }
+    KDL::JntArray positions(ik_chain_.getNrOfJoints());
+    for (unsigned int index = 0; index < ik_chain_.getNrOfJoints(); ++index) {
+      positions(index) = chain_position[index];
+    }
+    KDL::Jacobian full_jacobian(ik_chain_.getNrOfJoints());
+    if (jacobian_solver_->JntToJac(positions, full_jacobian) < 0) {
+      return false;
+    }
+    jacobian.resize(6, arm_chain_indices_.size());
+    for (std::size_t index = 0; index < arm_chain_indices_.size(); ++index) {
+      jacobian.col(index) = full_jacobian.data.col(arm_chain_indices_[index]);
+    }
+    return jacobian.allFinite();
+  }
+
+  double jointLimitMargin(std::size_t index) const
+  {
+    if (ik_options_.joint_limit_margins.size() ==
+        static_cast<Eigen::Index>(arm_joint_names_.size())) {
+      return std::max(
+        0.0, ik_options_.joint_limit_margins[static_cast<Eigen::Index>(index)]);
+    }
+    return std::max(0.0, ik_options_.joint_limit_margin);
+  }
+
+  double minimumProtectedJointClearance(
+    const Eigen::VectorXd& arm_position) const
+  {
+    if (arm_position.size() != arm_lower_limits_.size() ||
+        arm_position.size() != arm_upper_limits_.size()) {
+      return -std::numeric_limits<double>::infinity();
+    }
+    double minimum_clearance = std::numeric_limits<double>::infinity();
+    for (Eigen::Index index = 0; index < arm_position.size(); ++index) {
+      const double margin = jointLimitMargin(static_cast<std::size_t>(index));
+      minimum_clearance = std::min(
+        minimum_clearance,
+        std::min(
+          arm_position[index] - (arm_lower_limits_[index] + margin),
+          (arm_upper_limits_[index] - margin) - arm_position[index]));
+    }
+    return minimum_clearance;
+  }
+
+  double visibilitySafetyScale(
+    const Eigen::VectorXd& arm_position,
+    const Eigen::MatrixXd& jacobian,
+    double& minimum_joint_clearance,
+    double& minimum_singular_value) const
+  {
+    minimum_joint_clearance = minimumProtectedJointClearance(arm_position);
+    minimum_singular_value = minimumSingularValue(jacobian);
+    const double joint_scale = smoothRamp(
+      minimum_joint_clearance,
+      visibility_joint_margin_disable_buffer_rad_,
+      visibility_joint_margin_full_buffer_rad_);
+    const double singularity_scale = smoothRamp(
+      minimum_singular_value,
+      visibility_singularity_disable_threshold_,
+      visibility_singularity_full_threshold_);
+    return std::min(joint_scale, singularity_scale);
+  }
+
+  double visibilityPostureCost(
+    const Eigen::VectorXd& chain_position,
+    double* maximum_upward_slope = nullptr,
+    double* elbow_slope = nullptr) const
+  {
+    if (maximum_upward_slope) {
+      *maximum_upward_slope = -1.0;
+    }
+    if (elbow_slope) {
+      *elbow_slope = -1.0;
+    }
+    if (!visibility_avoidance_enabled_ || !visibility_model_ready_ ||
+        !fk_solver_ || visibility_link_segment_numbers_.size() < 2 ||
+        chain_position.size() !=
+          static_cast<Eigen::Index>(ik_chain_.getNrOfJoints())) {
+      return 0.0;
+    }
+
+    KDL::JntArray positions(ik_chain_.getNrOfJoints());
+    for (unsigned int index = 0; index < ik_chain_.getNrOfJoints(); ++index) {
+      positions(index) = chain_position[index];
+    }
+
+    std::vector<Eigen::Vector3d> link_positions;
+    link_positions.reserve(visibility_link_segment_numbers_.size());
+    for (const int segment_number : visibility_link_segment_numbers_) {
+      KDL::Frame frame;
+      if (fk_solver_->JntToCart(positions, frame, segment_number) < 0) {
+        return 0.0;
+      }
+      link_positions.emplace_back(
+        frame.p.x(), frame.p.y(), frame.p.z());
+    }
+
+    double cost = lowElbowPreferenceCost(
+      link_positions[0],
+      link_positions[1],
+      visibility_low_elbow_target_slope_,
+      visibility_low_elbow_reward_weight_);
+    const double current_elbow_slope = normalizedUpwardSlope(
+      link_positions[0], link_positions[1]);
+    if (elbow_slope && std::isfinite(current_elbow_slope)) {
+      *elbow_slope = current_elbow_slope;
+    }
+    double maximum_slope = -1.0;
+    for (std::size_t index = 1; index < link_positions.size(); ++index) {
+      const Eigen::Vector3d& start = link_positions[index - 1];
+      const Eigen::Vector3d& end = link_positions[index];
+      cost += upwardSegmentPenalty(
+        start, end, visibility_upward_activation_ratio_);
+      const double slope = normalizedUpwardSlope(start, end);
+      if (std::isfinite(slope)) {
+        maximum_slope = std::max(maximum_slope, slope);
+      }
+    }
+    if (maximum_upward_slope) {
+      *maximum_upward_slope = maximum_slope;
+    }
+    return std::isfinite(cost) ? cost : 0.0;
+  }
+
+  Eigen::VectorXd visibilityAvoidanceVelocity(
+    const Eigen::VectorXd& chain_position,
+    const Eigen::MatrixXd& jacobian,
+    double safety_scale,
+    double& current_cost,
+    double& maximum_upward_slope,
+    double& elbow_slope) const
+  {
+    Eigen::VectorXd avoidance = Eigen::VectorXd::Zero(arm_joint_names_.size());
+    current_cost = visibilityPostureCost(
+      chain_position, &maximum_upward_slope, &elbow_slope);
+    const double speed = std::max(0.0, visibility_avoidance_velocity_radps_);
+    const double safe_scale = clamp(safety_scale, 0.0, 1.0);
+    if (current_cost <= 1e-12 || speed <= 0.0 || safe_scale <= 0.0) {
+      return avoidance;
+    }
+
+    const double step = std::max(1e-4, visibility_gradient_step_rad_);
+    Eigen::VectorXd gradient = Eigen::VectorXd::Zero(arm_joint_names_.size());
+    for (std::size_t index = 0; index < arm_chain_indices_.size(); ++index) {
+      const std::size_t chain_index = arm_chain_indices_[index];
+      Eigen::VectorXd plus = chain_position;
+      Eigen::VectorXd minus = chain_position;
+      plus[chain_index] = std::min(
+        arm_upper_limits_[index] - 1e-4,
+        chain_position[chain_index] + step);
+      minus[chain_index] = std::max(
+        arm_lower_limits_[index] + 1e-4,
+        chain_position[chain_index] - step);
+      const double denominator = plus[chain_index] - minus[chain_index];
+      if (denominator <= 1e-8) {
+        continue;
+      }
+      gradient[index] =
+        (visibilityPostureCost(plus) - visibilityPostureCost(minus)) /
+        denominator;
+      if (std::abs(gradient[index]) < 1e-7) {
+        gradient[index] = 0.0;
+      }
+    }
+    if (!gradient.allFinite() || gradient.norm() <= 1e-8) {
+      return avoidance;
+    }
+
+    const Eigen::VectorXd projected = projectIntoTaskNullspace(
+      jacobian, -gradient);
+    if (projected.size() != avoidance.size() || !projected.allFinite() ||
+        projected.norm() <= 1e-8) {
+      return avoidance;
+    }
+    const double denominator = std::max(
+      1e-6, 1.0 - visibility_upward_activation_ratio_);
+    const double upward_strength = clamp(
+      (maximum_upward_slope - visibility_upward_activation_ratio_) /
+        denominator,
+      0.0,
+      1.0);
+    const double low_elbow_strength =
+      visibility_low_elbow_reward_weight_ > 0.0 && std::isfinite(elbow_slope)
+      ? clamp(visibility_low_elbow_reward_weight_, 0.0, 1.0) * clamp(
+          (elbow_slope - visibility_low_elbow_target_slope_) /
+            std::max(
+              1e-6,
+              visibility_upward_activation_ratio_ -
+                visibility_low_elbow_target_slope_),
+          0.0,
+          1.0)
+      : 0.0;
+    const double strength = std::max(upward_strength, low_elbow_strength);
+    return safe_scale * speed * strength * projected.normalized();
+  }
+
+  Eigen::VectorXd singularityEscapeVelocity(
+    const Eigen::VectorXd& chain_position,
+    const Eigen::MatrixXd& jacobian) const
+  {
+    Eigen::VectorXd escape = Eigen::VectorXd::Zero(arm_joint_names_.size());
+    const double threshold = std::max(0.0, singularity_avoidance_threshold_);
+    const double speed = std::max(0.0, singularity_escape_velocity_radps_);
+    const double current_metric = minimumSingularValue(jacobian);
+    if (threshold <= 0.0 || speed <= 0.0 || current_metric >= threshold) {
+      return escape;
+    }
+
+    const double step = std::max(1e-4, singularity_gradient_step_rad_);
+    Eigen::VectorXd gradient = Eigen::VectorXd::Zero(arm_joint_names_.size());
+    for (std::size_t index = 0; index < arm_chain_indices_.size(); ++index) {
+      const std::size_t chain_index = arm_chain_indices_[index];
+      Eigen::VectorXd plus = chain_position;
+      Eigen::VectorXd minus = chain_position;
+      plus[chain_index] = std::min(
+        arm_upper_limits_[index] - 1e-4,
+        chain_position[chain_index] + step);
+      minus[chain_index] = std::max(
+        arm_lower_limits_[index] + 1e-4,
+        chain_position[chain_index] - step);
+      const double denominator = plus[chain_index] - minus[chain_index];
+      if (denominator <= 1e-8) {
+        continue;
+      }
+      Eigen::MatrixXd plus_jacobian;
+      Eigen::MatrixXd minus_jacobian;
+      if (armJacobian(plus, plus_jacobian) &&
+          armJacobian(minus, minus_jacobian)) {
+        gradient[index] =
+          (minimumSingularValue(plus_jacobian) -
+          minimumSingularValue(minus_jacobian)) / denominator;
+      }
+    }
+    if (gradient.allFinite() && gradient.norm() > 1e-6) {
+      return speed * gradient.normalized();
+    }
+
+    // At an exactly symmetric singularity the central gradient can be zero.
+    // Probe both directions of the instantaneous null vector and choose the
+    // one that improves manipulability (or joint centering on a tie).
+    const Eigen::JacobiSVD<Eigen::MatrixXd> decomposition(
+      jacobian, Eigen::ComputeFullV);
+    if (decomposition.matrixV().cols() == 0) {
+      return escape;
+    }
+    Eigen::VectorXd null_vector =
+      decomposition.matrixV().col(decomposition.matrixV().cols() - 1);
+    if (!null_vector.allFinite() || null_vector.norm() <= 1e-8) {
+      return escape;
+    }
+    null_vector.normalize();
+
+    auto probe = [&](double direction, double& metric, double& center_cost) {
+      Eigen::VectorXd candidate = chain_position;
+      center_cost = 0.0;
+      for (std::size_t index = 0; index < arm_chain_indices_.size(); ++index) {
+        const std::size_t chain_index = arm_chain_indices_[index];
+        candidate[chain_index] = clamp(
+          candidate[chain_index] + direction * step * null_vector[index],
+          arm_lower_limits_[index] + 1e-4,
+          arm_upper_limits_[index] - 1e-4);
+        const double midpoint =
+          0.5 * (arm_lower_limits_[index] + arm_upper_limits_[index]);
+        const double half_range =
+          0.5 * (arm_upper_limits_[index] - arm_lower_limits_[index]);
+        const double normalized = (candidate[chain_index] - midpoint) / half_range;
+        center_cost += normalized * normalized;
+      }
+      Eigen::MatrixXd candidate_jacobian;
+      metric = armJacobian(candidate, candidate_jacobian)
+        ? minimumSingularValue(candidate_jacobian)
+        : -1.0;
+    };
+    double plus_metric = -1.0;
+    double minus_metric = -1.0;
+    double plus_cost = std::numeric_limits<double>::infinity();
+    double minus_cost = std::numeric_limits<double>::infinity();
+    probe(1.0, plus_metric, plus_cost);
+    probe(-1.0, minus_metric, minus_cost);
+    const double direction = std::abs(plus_metric - minus_metric) > 1e-8
+      ? (plus_metric > minus_metric ? 1.0 : -1.0)
+      : (plus_cost <= minus_cost ? 1.0 : -1.0);
+    return direction * speed * null_vector;
+  }
+
+  bool publishResolvedRateJointCommand(
+    const Eigen::Vector3d& linear,
+    const Eigen::Vector3d& angular,
+    RedundantIkResult* result_out = nullptr)
+  {
+    if (!ik_model_ready_) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Waiting for the redundant IK robot model");
+      return false;
+    }
+    if (!hasTime(last_joint_state_received_) ||
+        secondsBetween(SteadyClock::now(), last_joint_state_received_) >
+          std::max(0.02, joint_state_timeout_sec_)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for fresh joint state for redundant IK");
+      return false;
+    }
+
+    Eigen::VectorXd chain_position;
+    Eigen::VectorXd arm_position;
+    Eigen::MatrixXd jacobian;
+    if (!currentIkPositions(chain_position, arm_position) ||
+        !armJacobian(chain_position, jacobian)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Joint state is incomplete for the KDL arm chain");
+      return false;
+    }
+
+    Eigen::VectorXd cartesian_velocity(6);
+    cartesian_velocity <<
+      linear.x(), linear.y(), linear.z(),
+      angular.x(), angular.y(), angular.z();
+    const Eigen::VectorXd singularity_escape = singularityEscapeVelocity(
+      chain_position, jacobian);
+    double visibility_cost = 0.0;
+    double maximum_upward_slope = -1.0;
+    double elbow_slope = -1.0;
+    double minimum_joint_clearance =
+      -std::numeric_limits<double>::infinity();
+    double visibility_sigma_minimum = 0.0;
+    const double visibility_safety_scale = visibilitySafetyScale(
+      arm_position,
+      jacobian,
+      minimum_joint_clearance,
+      visibility_sigma_minimum);
+    Eigen::VectorXd visibility_avoidance = visibilityAvoidanceVelocity(
+      chain_position,
+      jacobian,
+      visibility_safety_scale,
+      visibility_cost,
+      maximum_upward_slope,
+      elbow_slope);
+    const Eigen::VectorXd prioritized_visibility =
+      removeOpposingSecondaryComponent(
+        singularity_escape, visibility_avoidance);
+    if (prioritized_visibility.size() != visibility_avoidance.size()) {
+      return false;
+    }
+    visibility_avoidance = prioritized_visibility;
+    const Eigen::VectorXd secondary = singularity_escape + visibility_avoidance;
+    const RedundantIkResult result = solveRedundantVelocityIk(
+      jacobian,
+      cartesian_velocity,
+      arm_position,
+      arm_lower_limits_,
+      arm_upper_limits_,
+      arm_velocity_limits_,
+      secondary,
+      ik_options_);
+    if (!result.valid) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Prioritized redundant IK failed; publishing a halt");
+      return false;
+    }
+    if (result_out) {
+      *result_out = result;
+    }
+    if (result.damping > 1e-6) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "Near a singularity (sigma_min %.4f): adaptive damping %.4f and "
+        "null-space escape are active",
+        result.minimum_singular_value, result.damping);
+    }
+    if (visibility_avoidance.norm() > 1e-6) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "Middle-arm visibility bias active (maximum upward slope %.2f, "
+        "elbow slope %.2f, activation %.2f, posture cost %.3f)",
+        maximum_upward_slope,
+        elbow_slope,
+        visibility_upward_activation_ratio_,
+        visibility_cost);
+    } else if (visibility_cost > 1e-12 && visibility_safety_scale < 0.999) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "Middle-arm visibility bias safety-scaled to %.2f (sigma_min %.4f, "
+        "clearance beyond protected joint margins %.3f rad)",
+        visibility_safety_scale,
+        visibility_sigma_minimum,
+        minimum_joint_clearance);
+    }
+    if (result.position_limited_joint_count > result.blocked_joint_count) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "Predictive margins constrained %d joint(s); residual motion was "
+        "redistributed through the %d-joint priority prefix",
+        result.position_limited_joint_count,
+        result.selected_joint_count);
+    }
+    if (result.velocity_limited_joint_count > 0) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "Velocity limits saturated %d joint(s); residual motion was "
+        "redistributed through the %d-joint priority prefix",
+        result.velocity_limited_joint_count,
+        result.selected_joint_count);
+    }
+    if (result.blocked_joint_count > 0) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "Blocked %d joint(s) from moving farther into a protected limit "
+        "margin and redistributed the Cartesian command",
+        result.blocked_joint_count);
+    }
+    if (result.linear_residual_norm > 1e-4 ||
+        result.angular_residual_norm > 1e-4) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "Prioritized IK residual after all available fallbacks: "
+        "linear %.5f m/s, angular %.5f rad/s",
+        result.linear_residual_norm,
+        result.angular_residual_norm);
+    }
+
+    control_msgs::msg::JointJog command;
+    command.header.stamp = now();
+    command.header.frame_id = planning_frame_;
+    command.joint_names = arm_joint_names_;
+    command.velocities.assign(
+      result.joint_velocity.data(),
+      result.joint_velocity.data() + result.joint_velocity.size());
+    command.duration = 1.0 / arm_control_rate_hz_;
+    servo_joint_publisher_->publish(command);
+    return true;
   }
 
   void onGripperOpening(const std_msgs::msg::Float64::SharedPtr message)
@@ -957,6 +1883,140 @@ private:
       });
   }
 
+  void resetMappedTargetToTool(
+    const CartesianPose& tool_pose,
+    const SteadyTime& current_time)
+  {
+    controller_anchor_ = latest_controller_pose_;
+    tool_anchor_ = tool_pose;
+    filtered_target_ = tool_pose;
+    previous_filtered_target_ = tool_pose;
+    last_target_sample_time_ = last_hand_target_received_;
+    target_linear_velocity_.setZero();
+    target_angular_velocity_.setZero();
+    last_linear_command_.setZero();
+    last_angular_command_.setZero();
+    last_arm_control_tick_ = current_time;
+    unreachable_residual_since_ = SteadyTime{};
+    new_hand_pose_ = false;
+    arm_halt_commands_remaining_ = 0;
+    arm_tracking_ = true;
+    publishArmActive(true);
+    publishMappedTarget(filtered_target_);
+  }
+
+  void publishRecoveryJointCommand(const Eigen::VectorXd& velocity)
+  {
+    control_msgs::msg::JointJog command;
+    command.header.stamp = now();
+    command.header.frame_id = planning_frame_;
+    command.joint_names = arm_joint_names_;
+    command.velocities.assign(
+      velocity.data(), velocity.data() + velocity.size());
+    command.duration = 1.0 / arm_control_rate_hz_;
+    servo_joint_publisher_->publish(command);
+  }
+
+  bool updateJointLimitRecovery(const SteadyTime& current_time)
+  {
+    if (!joint_limit_recovery_active_) {
+      return false;
+    }
+
+    publishZeroServoTwist();
+    if (!hasTime(last_joint_state_received_) ||
+        secondsBetween(current_time, last_joint_state_received_) >
+          std::max(0.02, joint_state_timeout_sec_)) {
+      publishZeroServoJointCommand();
+      return true;
+    }
+
+    Eigen::VectorXd chain_position;
+    Eigen::VectorXd arm_position;
+    if (!currentIkPositions(chain_position, arm_position)) {
+      publishZeroServoJointCommand();
+      return true;
+    }
+
+    Eigen::VectorXd margins(arm_position.size());
+    for (Eigen::Index index = 0; index < margins.size(); ++index) {
+      margins[index] = jointLimitMargin(static_cast<std::size_t>(index));
+    }
+    const Eigen::VectorXd recovery = inwardJointLimitRecoveryVelocity(
+      arm_position,
+      arm_lower_limits_,
+      arm_upper_limits_,
+      arm_velocity_limits_,
+      margins,
+      joint_limit_recovery_release_buffer_rad_,
+      joint_limit_recovery_gain_,
+      joint_limit_recovery_velocity_radps_);
+    if (recovery.size() != arm_position.size()) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Joint-limit recovery configuration is invalid; publishing a halt");
+      publishZeroServoJointCommand();
+      return true;
+    }
+
+    if (recovery.norm() > 1e-9) {
+      publishRecoveryJointCommand(recovery);
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Joint-limit recovery active; Cartesian and visibility commands are "
+        "suspended while protected joint clearance is restored");
+      return true;
+    }
+
+    CartesianPose tool_pose;
+    if (!lookupToolPose(tool_pose)) {
+      publishZeroServoJointCommand();
+      return true;
+    }
+    joint_limit_recovery_active_ = false;
+    publishZeroServoJointCommand();
+    resetMappedTargetToTool(tool_pose, current_time);
+    RCLCPP_INFO(
+      get_logger(),
+      "Joint-limit recovery complete; controller target rebased to the live tool");
+    return true;
+  }
+
+  bool rebaseUnreachableTargetIfNeeded(
+    const RedundantIkResult& result,
+    const CartesianPose& current_tool_pose,
+    const SteadyTime& current_time)
+  {
+    const bool constrained = result.position_limited_joint_count > 0 ||
+      result.minimum_singular_value < visibility_singularity_full_threshold_;
+    const bool unreachable = constrained &&
+      result.linear_residual_norm > unreachable_linear_residual_mps_;
+    if (!unreachable) {
+      unreachable_residual_since_ = SteadyTime{};
+      return false;
+    }
+    if (!hasTime(unreachable_residual_since_)) {
+      unreachable_residual_since_ = current_time;
+      return false;
+    }
+    if (secondsBetween(current_time, unreachable_residual_since_) <
+        unreachable_timeout_sec_) {
+      return false;
+    }
+
+    publishZeroServoTwist();
+    publishZeroServoJointCommand();
+    resetMappedTargetToTool(current_tool_pose, current_time);
+    RCLCPP_WARN(
+      get_logger(),
+      "Persistent unreachable Cartesian target rebased after %.2f s "
+      "(linear residual %.3f m/s, sigma_min %.4f)",
+      unreachable_timeout_sec_,
+      result.linear_residual_norm,
+      result.minimum_singular_value);
+    return true;
+  }
+
   void updateArmControl()
   {
     const SteadyTime current_time = SteadyClock::now();
@@ -982,31 +2042,27 @@ private:
     if (!servo_started_) {
       return;
     }
+    if (!ik_model_ready_) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Waiting for the redundant IK model before anchoring the arm");
+      return;
+    }
 
     if (!arm_tracking_) {
       CartesianPose tool_pose;
       if (!lookupToolPose(tool_pose)) {
         return;
       }
-      controller_anchor_ = latest_controller_pose_;
-      tool_anchor_ = tool_pose;
-      filtered_target_ = tool_pose;
-      previous_filtered_target_ = tool_pose;
-      last_target_sample_time_ = last_hand_target_received_;
-      target_linear_velocity_.setZero();
-      target_angular_velocity_.setZero();
-      last_linear_command_.setZero();
-      last_angular_command_.setZero();
-      last_arm_control_tick_ = current_time;
-      new_hand_pose_ = false;
-      arm_halt_commands_remaining_ = 0;
-      arm_tracking_ = true;
-      publishArmActive(true);
-      publishMappedTarget(filtered_target_);
+      resetMappedTargetToTool(tool_pose, current_time);
       RCLCPP_INFO(
         get_logger(),
         "Deadman anchored: controller top frame now maps to '%s'",
         end_effector_link_.c_str());
+    }
+
+    if (updateJointLimitRecovery(current_time)) {
+      return;
     }
 
     if (new_hand_pose_) {
@@ -1063,7 +2119,20 @@ private:
       max_angular_acceleration_radps2_,
       control_dt);
 
+    // Preserve the requested Cartesian command as the high-level executed
+    // action stream. The local prioritized IK converts it to the JointJog that
+    // MoveIt Servo validates, smooths, and forwards to the arm controller.
     publishServoTwist(linear_command, angular_command);
+    RedundantIkResult ik_result;
+    if (!publishResolvedRateJointCommand(
+        linear_command, angular_command, &ik_result)) {
+      haltArm(true, "redundant IK input or solution unavailable");
+      return;
+    }
+    if (rebaseUnreachableTargetIfNeeded(
+        ik_result, current_tool_pose, current_time)) {
+      return;
+    }
     last_linear_command_ = linear_command;
     last_angular_command_ = angular_command;
   }
@@ -1075,9 +2144,18 @@ private:
       controller_anchor_,
       tool_anchor_,
       hand_position_scale_);
-    if (!isFinite(raw_target) || !constrainTarget(raw_target)) {
+    bool workspace_clamped = false;
+    if (!isFinite(raw_target) ||
+        !constrainTarget(raw_target, &workspace_clamped)) {
       haltArm(true, "invalid mapped target");
       return;
+    }
+    if (workspace_clamped) {
+      // Rebase at the constrained target so motion farther outside the
+      // workspace cannot accumulate into a controller dead zone. The next
+      // inward sample therefore takes effect immediately.
+      controller_anchor_ = latest_controller_pose_;
+      tool_anchor_ = raw_target;
     }
 
     const double sample_dt = secondsBetween(
@@ -1116,6 +2194,12 @@ private:
       target_linear_velocity_.setZero();
       target_angular_velocity_.setZero();
     }
+    if (workspace_clamped) {
+      target_linear_velocity_.setZero();
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Workspace anti-windup rebased the controller target at the boundary");
+    }
 
     filtered_target_ = next_target;
     previous_filtered_target_ = next_target;
@@ -1124,8 +2208,11 @@ private:
     publishArmActive(true);
   }
 
-  bool constrainTarget(CartesianPose& target)
+  bool constrainTarget(CartesianPose& target, bool* was_clamped = nullptr)
   {
+    if (was_clamped) {
+      *was_clamped = false;
+    }
     if (!isFinite(target)) {
       return false;
     }
@@ -1141,6 +2228,9 @@ private:
       return false;
     }
     if (!target.position.isApprox(unconstrained, 1e-12)) {
+      if (was_clamped) {
+        *was_clamped = true;
+      }
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
         "Clamping mapped hand target to the configured Cartesian workspace");
@@ -1186,12 +2276,24 @@ private:
     publishServoTwist(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
   }
 
+  void publishZeroServoJointCommand()
+  {
+    control_msgs::msg::JointJog command;
+    command.header.stamp = now();
+    command.header.frame_id = planning_frame_;
+    command.joint_names = arm_joint_names_;
+    command.velocities.assign(arm_joint_names_.size(), 0.0);
+    command.duration = 1.0 / arm_control_rate_hz_;
+    servo_joint_publisher_->publish(command);
+  }
+
   void publishRemainingArmHalts()
   {
     if (arm_halt_commands_remaining_ <= 0) {
       return;
     }
     publishZeroServoTwist();
+    publishZeroServoJointCommand();
     --arm_halt_commands_remaining_;
   }
 
@@ -1211,12 +2313,15 @@ private:
     tool_anchor_ = CartesianPose{};
     last_target_sample_time_ = SteadyTime{};
     last_arm_control_tick_ = SteadyTime{};
+    unreachable_residual_since_ = SteadyTime{};
+    joint_limit_recovery_active_ = false;
     if (timeout && require_deadman_repress_after_timeout_) {
       arm_rearm_required_ = true;
     }
     if (effective_arm_active_ || had_state) {
       publishArmActive(false);
       publishZeroServoTwist();
+      publishZeroServoJointCommand();
       arm_halt_commands_remaining_ = std::max(0, arm_halt_command_count_ - 1);
     }
     if (had_state) {
@@ -1239,9 +2344,12 @@ private:
   std::string base_command_topic_;
   std::string base_command_frame_;
   std::string joint_state_topic_;
+  std::string robot_description_topic_;
   std::string servo_twist_topic_;
+  std::string servo_joint_topic_;
   std::string servo_pose_target_topic_;
   std::string servo_pose_active_topic_;
+  std::string servo_status_topic_;
   std::string servo_start_service_;
 
   double arm_control_rate_hz_{ 100.0 };
@@ -1249,6 +2357,29 @@ private:
   double robot_state_timeout_sec_{ 0.20 };
   bool require_deadman_repress_after_timeout_{ true };
   int arm_halt_command_count_{ 4 };
+  std::vector<std::string> arm_joint_names_;
+  RedundantIkOptions ik_options_;
+  double singularity_avoidance_threshold_{ 0.10 };
+  double singularity_escape_velocity_radps_{ 0.30 };
+  double singularity_gradient_step_rad_{ 0.01 };
+  bool visibility_avoidance_enabled_{ true };
+  std::vector<std::string> visibility_link_names_{
+    "arm_3_link", "arm_4_link", "arm_5_link"
+  };
+  double visibility_upward_activation_ratio_{ 0.10 };
+  double visibility_avoidance_velocity_radps_{ 0.20 };
+  double visibility_low_elbow_reward_weight_{ 0.40 };
+  double visibility_low_elbow_target_slope_{ -0.20 };
+  double visibility_gradient_step_rad_{ 0.01 };
+  double visibility_singularity_disable_threshold_{ 0.04 };
+  double visibility_singularity_full_threshold_{ 0.08 };
+  double visibility_joint_margin_disable_buffer_rad_{ 0.04 };
+  double visibility_joint_margin_full_buffer_rad_{ 0.15 };
+  double joint_limit_recovery_velocity_radps_{ 0.18 };
+  double joint_limit_recovery_gain_{ 2.0 };
+  double joint_limit_recovery_release_buffer_rad_{ 0.03 };
+  double unreachable_linear_residual_mps_{ 0.20 };
+  double unreachable_timeout_sec_{ 0.50 };
   double max_hand_target_distance_m_{ 1.5 };
   double min_hand_target_z_m_{ 0.2 };
   double max_hand_target_z_m_{ 1.6 };
@@ -1256,18 +2387,18 @@ private:
   Eigen::Vector3d controller_top_offset_{ Eigen::Vector3d::Zero() };
   Eigen::Vector3d controller_to_tool_rpy_{ Eigen::Vector3d::Zero() };
   Eigen::Quaterniond controller_to_tool_rotation_{ Eigen::Quaterniond::Identity() };
-  double linear_gain_{ 5.0 };
-  double angular_gain_{ 2.5 };
-  double max_linear_velocity_mps_{ 0.35 };
-  double max_angular_velocity_radps_{ 1.2 };
-  double max_linear_acceleration_mps2_{ 2.0 };
-  double max_angular_acceleration_radps2_{ 6.0 };
+  double linear_gain_{ 7.0 };
+  double angular_gain_{ 4.0 };
+  double max_linear_velocity_mps_{ 0.45 };
+  double max_angular_velocity_radps_{ 1.6 };
+  double max_linear_acceleration_mps2_{ 4.0 };
+  double max_angular_acceleration_radps2_{ 10.0 };
   double position_deadband_m_{ 0.0005 };
   double orientation_deadband_rad_{ 0.003 };
-  double target_filter_cutoff_hz_{ 12.0 };
+  double target_filter_cutoff_hz_{ 20.0 };
   double linear_feedforward_gain_{ 1.0 };
   double angular_feedforward_gain_{ 1.0 };
-  double feedforward_filter_alpha_{ 0.35 };
+  double feedforward_filter_alpha_{ 0.55 };
   double feedforward_timeout_sec_{ 0.05 };
   double feedforward_reset_gap_sec_{ 0.12 };
   double linear_feedforward_stop_velocity_mps_{ 0.005 };
@@ -1315,6 +2446,7 @@ private:
     gripper_trajectory_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr base_velocity_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr servo_twist_publisher_;
+  rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr servo_joint_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr
     servo_pose_target_publisher_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr servo_pose_active_publisher_;
@@ -1329,6 +2461,10 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr base_active_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr
     joint_state_subscription_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr
+    robot_description_subscription_;
+  rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr
+    servo_status_subscription_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr servo_start_client_;
   rclcpp::TimerBase::SharedPtr arm_control_timer_;
   rclcpp::TimerBase::SharedPtr head_timer_;
@@ -1342,6 +2478,21 @@ private:
   std::unordered_map<std::string, double> joint_positions_;
   SteadyTime last_joint_state_received_{};
   std::optional<double> last_gripper_target_;
+
+  // The KDL chain includes any fixed/current upstream joints (for example the
+  // torso), while arm_chain_indices_ selects only arm_1 through arm_7 for the
+  // resolved-rate solver and output command.
+  bool ik_model_ready_{ false };
+  bool visibility_model_ready_{ false };
+  KDL::Chain ik_chain_;
+  std::unique_ptr<KDL::ChainJntToJacSolver> jacobian_solver_;
+  std::unique_ptr<KDL::ChainFkSolverPos_recursive> fk_solver_;
+  std::vector<std::string> chain_joint_names_;
+  std::vector<std::size_t> arm_chain_indices_;
+  std::vector<int> visibility_link_segment_numbers_;
+  Eigen::VectorXd arm_lower_limits_;
+  Eigen::VectorXd arm_upper_limits_;
+  Eigen::VectorXd arm_velocity_limits_;
 
   // Base state.
   bool base_active_input_{ false };
@@ -1379,7 +2530,9 @@ private:
   SteadyTime last_target_sample_time_{};
   SteadyTime last_arm_control_tick_{};
   SteadyTime last_valid_tool_tf_{};
+  SteadyTime unreachable_residual_since_{};
   int arm_halt_commands_remaining_{ 0 };
+  bool joint_limit_recovery_active_{ false };
 
   bool servo_started_{ false };
   bool servo_start_request_in_flight_{ false };

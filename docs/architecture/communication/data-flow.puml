@@ -11,8 +11,8 @@ participant "WebRTCServer\nwebrtc_server" as Server
 participant "ImageSubscriber\n+ VideoTrack" as Video
 participant "InputPublisher\nwebrtc_server" as Input
 participant "RobotInputState\nwebrtc_server" as Snapshot
-participant "C++ ViveMoveItServer\n100 Hz Cartesian loop" as Teleop
-participant "MoveIt Servo\n7-DOF differential IK" as Servo
+participant "C++ ViveMoveItServer\n100 Hz loop + hierarchical IK" as Teleop
+participant "MoveIt Servo\njoint safety + smoothing" as Servo
 participant "Robot controllers" as Robot
 
 == startup and state ==
@@ -46,14 +46,15 @@ Teleop -> Robot : guarded /key_vel Twist
 Robot -> Teleop : current arm_tool_link TF
 Teleop -> Teleop : top-frame clutch + filter\nfeedback/feed-forward + limits
 Teleop -> Teleop : publish mapped pose + effective gate\nfor diagnostics/recording
-Teleop -> Servo : /servo_node/delta_twist_cmds\nphysical speed_units
+Teleop -> Teleop : orientation-first 7-DOF IK\nJ7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1\nbounded residual fallback + wrist margins
+Teleop -> Servo : /servo_node/delta_joint_cmds\nphysical joint speed_units
 Servo -> Robot : /arm_controller/joint_trajectory
 
 == halt ==
 Client -> Server : wristCommandEnabled=false or stream stops
 Input -> Teleop : /vive/hand_target_active=false
 Teleop -> Teleop : clear anchors/filter/feed-forward
-Teleop -> Servo : repeated zero twists
+Teleop -> Servo : repeated zero JointJog commands
 
 Client -> Server : joystickPrimaryButton=false
 Input -> Teleop : /vive/base_active=false

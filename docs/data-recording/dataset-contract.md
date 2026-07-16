@@ -82,7 +82,8 @@ label. Record all inexpensive action stages now, then choose one during export.
 | Operator target | `/vive/hand_target_pose` | Unity/browser target accepted by gateway | Optional intent/provenance |
 | Effective gate | `/servo_node/pose_target_active` | Whether the C++ Cartesian controller accepts pose pursuit | Required action-valid mask |
 | Mapped robot target | `/servo_node/pose_target_cmds` | Clutch-relative, workspace-constrained robot pose | Recommended high-level action source |
-| Executable Cartesian command | `/servo_node/delta_twist_cmds` | Feedback/feed-forward physical twist sent to Servo | Recommended executed-action source |
+| Executable Cartesian command | `/servo_node/delta_twist_cmds` | Feedback/feed-forward physical twist sent into prioritized bounded IK | Recommended high-level executed-action source |
+| Resolved joint command | `/servo_node/delta_joint_cmds` | Limit/singularity-aware seven-joint velocity sent to Servo | Recommended solver-output diagnostic |
 | Low-level arm command | `/arm_controller/joint_trajectory` | Servo output sent to arm controller | Required diagnostic/low-level action |
 | Gripper target | `/vive/gripper_opening` | Normalized requested opening | Recommended high-level gripper action |
 | Gripper controller command | `/gripper_controller/joint_trajectory` | Physical finger target/duration | Required executed gripper action |
@@ -99,8 +100,8 @@ target. Derive this offline from:
 - `/vive/gripper_opening`
 - `/servo_node/pose_target_active`
 
-Keep `/servo_node/delta_twist_cmds` and final trajectories as diagnostics and
-alternative labels. Avoid training directly on raw VR coordinates unless the
+Keep `/servo_node/delta_twist_cmds`, `/servo_node/delta_joint_cmds`, and final
+trajectories as diagnostics and alternative labels. Avoid training directly on raw VR coordinates unless the
 deployment policy will intentionally reproduce Unity's calibration and clutch
 mapping.
 
@@ -118,6 +119,7 @@ mapping.
 | `/servo_node/pose_target_active` | `std_msgs/msg/Bool` | `moveit_server` | Effective arm-action mask | Record while writer active; do not require at bootstrap |
 | `/servo_node/pose_target_cmds` | `geometry_msgs/msg/PoseStamped` | `moveit_server` | Mapped high-level robot action | Active, post-roll |
 | `/servo_node/delta_twist_cmds` | `geometry_msgs/msg/TwistStamped` | `moveit_server` C++ node | Executable Cartesian command | Active, post-roll |
+| `/servo_node/delta_joint_cmds` | `control_msgs/msg/JointJog` | `moveit_server` C++ prioritized bounded IK | Resolved seven-joint velocity | Active, post-roll |
 | `/arm_controller/joint_trajectory` | `trajectory_msgs/msg/JointTrajectory` | MoveIt Servo | Low-level arm command | Active, post-roll |
 | `/vive/gripper_opening` | `std_msgs/msg/Float64` | `webrtc_server` | Normalized gripper intent | Active, post-roll |
 | `/gripper_controller/joint_trajectory` | `trajectory_msgs/msg/JointTrajectory` | `moveit_server` | Physical gripper command | Active, post-roll |

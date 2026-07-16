@@ -10,8 +10,8 @@ skinparam linetype ortho
 
 component "Clients\nUnity / Browser" as Clients
 component "webrtc_server\nInputPublisher" as InputPublisher
-component "moveit_server\nC++ ViveMoveItServer\n100 Hz Cartesian loop" as Teleop
-component "MoveIt Servo\n7-DOF differential IK" as Servo
+component "moveit_server\nC++ ViveMoveItServer\n100 Hz Cartesian loop\nprioritized bounded 7-DOF IK" as Teleop
+component "MoveIt Servo\njoint safety + smoothing" as Servo
 component "TIAGo controllers" as Controllers
 component "Robot sensors/state" as Sensors
 
@@ -31,8 +31,8 @@ InputPublisher --> Teleop : /vive/base_active\nBool
 Teleop --> Controllers : /head_controller/joint_trajectory
 Teleop --> Controllers : /gripper_controller/joint_trajectory
 Teleop --> Controllers : /key_vel\nTwist
-Teleop --> Servo : /servo_node/delta_twist_cmds\nTwistStamped speed_units
-Teleop --> Teleop : /servo_node/pose_target_cmds\n/servo_node/pose_target_active\nobservability topics
+Teleop --> Teleop : /servo_node/pose_target_cmds\n/servo_node/pose_target_active\n/servo_node/delta_twist_cmds\nobservability/action topics
+Teleop --> Servo : /servo_node/delta_joint_cmds\nJointJog speed_units
 Servo --> Controllers : /arm_controller/joint_trajectory
 
 note bottom

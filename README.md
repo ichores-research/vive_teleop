@@ -64,14 +64,14 @@ flowchart LR
     O["Operator<br/>Vive headset + controller"]
     U["Unity VR client"]
     W["WebRTC gateway"]
-    T["C++ ROS 2 teleop<br/>100 Hz Cartesian control"]
+    T["C++ ROS 2 teleop<br/>100 Hz Cartesian control<br/>orientation-first 7-DOF IK"]
     S["MoveIt Servo"]
     R["TIAGo<br/>head · arm · gripper · base · camera"]
 
     O -->|head and hand motion| U
     U -->|pose + deadman + gripper + base<br/>WebRTC data channel| W
     W -->|typed /vive/* topics| T
-    T -->|velocity-limited Cartesian twist| S
+    T -->|limit-aware 7-joint velocity| S
     T -->|head + gripper trajectories<br/>guarded base velocity| R
     S -->|7-joint arm trajectory| R
     R -->|camera + live robot state| W
@@ -88,8 +88,10 @@ flowchart LR
 
 The control path separates transport from robot motion. WebRTC carries video and
 controller data across the network; the gateway converts input into typed ROS 2
-messages; the C++ controller closes the wrist pose loop from live TF at 100 Hz;
-MoveIt Servo resolves that Cartesian motion through all seven arm joints.
+messages; the C++ controller closes the wrist pose loop from live TF at 100 Hz
+and resolves it with prioritized, orientation-first 7-DOF IK; MoveIt Servo
+validates and smooths the resulting joint command before publishing the arm
+trajectory.
 
 ### Arm command lifecycle
 
@@ -100,7 +102,7 @@ stateDiagram-v2
     Anchored --> Tracking: wrist TF and controller pose are available
     Tracking --> Tracking: newest 6-DoF target replaces the last
     Tracking --> Halted: deadman released or input times out
-    Halted --> Idle: target cleared and zero-twist commands sent
+    Halted --> Idle: target cleared and zero twist/joint commands sent
 ```
 
 Each press anchors the controller's configured top frame to the robot's current
@@ -117,10 +119,19 @@ moment, allowing the operator to keep looking around without steering the arm.
   from a fresh robot pose rather than an old absolute target, with explicit
   controller-top alignment and tracked-origin offset calibration.
 - Real-time-oriented C++ arm loop: 100 Hz latest-value pose feedback,
-  target-velocity feed-forward, low-pass filtering, Cartesian speed/acceleration
-  limits, stale-input/TF watchdogs, memory locking, and `SCHED_FIFO` scheduling.
+  fast target-velocity feed-forward, a 20 Hz target filter, responsive
+  Cartesian gains and bounded acceleration, stale-input/TF watchdogs, memory
+  locking, and `SCHED_FIFO` scheduling.
+- Dexterity-first redundant IK: orientation is solved before translation and
+  joints activate in the order 7 → 6 → 5 → 3 → 2 → 4 → 1. A constrained
+  preferred joint hands residual motion to the next joint instead of slowing
+  the whole arm. Null-space centering and manipulability escape avoid trapped
+  wrist configurations, while actual-link upward penalties plus a bounded
+  low-elbow target keep the middle arm from filling the head-camera view.
 - Layered motion handling: deadman release, stale-input timeout, workspace bounds,
-  joint-limit scaling, singularity scaling, smoothing, and immediate target clear.
+  predictive joint margins (at least `0.24 rad` for joints 5-7), adaptive
+  damping, target anti-windup, inward joint recovery, Servo smoothing/final
+  limits, and immediate target clear.
 - Independent head, arm, gripper, and base paths: each control can stay responsive
   without coupling unrelated operator movement.
 - Containerized deployment: Dockerized ROS 2 services, automated runtime checks,

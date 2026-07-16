@@ -6,6 +6,15 @@ vive_moveit_server:
     end_effector_link: arm_tool_link
     pose_reference_frame: base_footprint
     joint_state_topic: /joint_states
+    robot_description_topic: /robot_description
+    arm_joint_names:
+      - arm_1_joint
+      - arm_2_joint
+      - arm_3_joint
+      - arm_4_joint
+      - arm_5_joint
+      - arm_6_joint
+      - arm_7_joint
 
     head_input_topic: /vive/head_pose
     head_command_topic: /head_controller/joint_trajectory
@@ -22,17 +31,74 @@ vive_moveit_server:
     hand_target_topic: /vive/hand_target_pose
     hand_target_active_topic: /vive/hand_target_active
     servo_twist_topic: /servo_node/delta_twist_cmds
+    servo_joint_topic: /servo_node/delta_joint_cmds
     servo_pose_target_topic: /servo_node/pose_target_cmds
     servo_pose_active_topic: /servo_node/pose_target_active
+    servo_status_topic: /servo_node/status
     servo_start_service: /servo_node/start_servo
 
-    # The C++ Cartesian controller and MoveIt Servo both run at 100 Hz. Servo
-    # performs differential inverse kinematics across all seven arm joints.
+    # The C++ Cartesian controller and MoveIt Servo both run at 100 Hz. The C++
+    # orientation-first solver resolves rotation before translation and admits
+    # joints in the strict order J7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1.
     arm_control_rate_hz: 100.0
     hand_target_timeout_sec: 0.12
     robot_state_timeout_sec: 0.20
     require_deadman_repress_after_timeout: true
     arm_halt_command_count: 4
+
+    # Redundant resolved-rate IK. Ascending motion cost defines the activation
+    # hierarchy. A constrained preferred joint is saturated locally and leaves
+    # its Cartesian residual for the next joint rather than slowing the whole
+    # arm. Joint-limit weighting starts before the hard predictive bound, then
+    # a null-space objective recenters the arm without moving the tool.
+    # Near a singularity, adaptive damping and a finite-difference
+    # manipulability gradient move the spare degree of freedom toward a better
+    # configuration rather than triggering Servo's Cartesian emergency stop.
+    ik_damping_threshold: 0.08
+    ik_maximum_damping: 0.08
+    ik_joint_motion_weights: [12.0, 3.0, 2.0, 4.0, 1.0, 0.5, 0.25]
+    ik_singularity_avoidance_threshold: 0.10
+    ik_singularity_escape_velocity_radps: 0.30
+    ik_singularity_gradient_step_rad: 0.01
+    # Keep the two long middle-arm segments out of an upward-pointing posture
+    # that can fill the head-camera view. The cost is based on actual link
+    # geometry in base_footprint, then projected into the Cartesian task null
+    # space so hand tracking remains the primary objective. A normalized slope
+    # of 0.10 is about 6 degrees above horizontal. The first segment also has a
+    # low-enough target at slope -0.20 (about 12 degrees down); all lower
+    # postures are equally good, preventing an endless drift toward joint
+    # limits. Visibility smoothly yields to singularity and limit recovery.
+    ik_visibility_avoidance_enabled: true
+    ik_visibility_link_names: [arm_3_link, arm_4_link, arm_5_link]
+    ik_visibility_upward_activation_ratio: 0.10
+    ik_visibility_avoidance_velocity_radps: 0.20
+    ik_visibility_low_elbow_reward_weight: 0.40
+    ik_visibility_low_elbow_target_slope: -0.20
+    ik_visibility_gradient_step_rad: 0.01
+    ik_visibility_singularity_disable_threshold: 0.04
+    ik_visibility_singularity_full_threshold: 0.08
+    ik_visibility_joint_margin_disable_buffer_rad: 0.04
+    ik_visibility_joint_margin_full_buffer_rad: 0.15
+    ik_joint_limit_activation_ratio: 0.65
+    ik_joint_limit_weight: 40.0
+    ik_joint_centering_gain_radps: 0.35
+    ik_maximum_secondary_velocity_radps: 0.40
+    # Allow 95% of each URDF velocity limit locally. The remaining headroom and
+    # MoveIt Servo's final checks retain the physical limit; per-joint
+    # saturation still activates the same dexterity-preserving fallbacks.
+    ik_joint_velocity_scale: 0.95
+    # These local bands remain materially inside Servo's final 0.08 rad guard.
+    # Only outward velocity is reduced; normal and recovery motion retain their
+    # configured speed. The longer lookahead accounts for Servo filtering and
+    # measured-state latency at the fast-follow acceleration limits.
+    ik_joint_limit_margins_rad: [0.14, 0.18, 0.14, 0.20, 0.24, 0.24, 0.24]
+    ik_joint_limit_margin_rad: 0.08
+    ik_joint_limit_lookahead_sec: 0.45
+    joint_limit_recovery_velocity_radps: 0.18
+    joint_limit_recovery_gain: 2.0
+    joint_limit_recovery_release_buffer_rad: 0.03
+    ik_unreachable_linear_residual_mps: 0.20
+    ik_unreachable_timeout_sec: 0.50
 
     # Clutch mapping is one-to-one. Translation stays in base_footprint while
     # orientation deltas are applied in the end-effector's local frame: the
@@ -50,21 +116,21 @@ vive_moveit_server:
     min_hand_target_z_m: 0.2
     max_hand_target_z_m: 1.6
 
-    # Pose feedback plus filtered target-velocity feed-forward. Explicit speed
-    # and acceleration caps make behavior reproducible instead of depending on
-    # saturation at an arbitrary arm joint.
-    linear_gain: 5.0
-    angular_gain: 2.5
-    max_linear_velocity_mps: 0.35
-    max_angular_velocity_radps: 1.20
-    max_linear_acceleration_mps2: 2.0
-    max_angular_acceleration_radps2: 6.0
+    # Fast-follow pose feedback plus target-velocity feed-forward. This profile
+    # reaches its Cartesian caps in roughly 0.11-0.16 s while retaining explicit
+    # acceleration bounds and Servo smoothing/final joint checks.
+    linear_gain: 7.0
+    angular_gain: 4.0
+    max_linear_velocity_mps: 0.45
+    max_angular_velocity_radps: 1.60
+    max_linear_acceleration_mps2: 4.0
+    max_angular_acceleration_radps2: 10.0
     position_deadband_m: 0.0005
     orientation_deadband_rad: 0.003
-    target_filter_cutoff_hz: 12.0
+    target_filter_cutoff_hz: 20.0
     linear_feedforward_gain: 1.0
     angular_feedforward_gain: 1.0
-    feedforward_filter_alpha: 0.35
+    feedforward_filter_alpha: 0.55
     feedforward_timeout_sec: 0.05
     feedforward_reset_gap_sec: 0.12
     linear_feedforward_stop_velocity_mps: 0.005

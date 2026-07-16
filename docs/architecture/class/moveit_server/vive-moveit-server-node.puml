@@ -22,15 +22,40 @@ class ViveMoveItServer <<rclcpp::Node>> {
   -arm_tracking_: bool
   -onHandActive(message): void
   -onHandTarget(message): void
+  -onServoStatus(message): void
+  -onRobotDescription(message): void
   -updateArmControl(): void
   -updateMappedTarget(): void
   -lookupToolPose(pose): bool
-  -constrainTarget(target): bool
+  -constrainTarget(target, was_clamped): bool
   -publishServoTwist(linear, angular): void
+  -publishResolvedRateJointCommand(linear, angular): bool
+  -armJacobian(chain_position, jacobian): bool
+  -visibilityPostureCost(chain_position): double
+  -visibilityAvoidanceVelocity(chain_position, jacobian, safety_scale): VectorXd
+  -singularityEscapeVelocity(chain_position, jacobian): VectorXd
+  -updateJointLimitRecovery(time): bool
+  -rebaseUnreachableTargetIfNeeded(result, tool, time): bool
   -haltArm(timeout, reason): void
   -updateHeadControl(): void
   -onGripperOpening(message): void
   -updateBaseControl(): void
+}
+
+class "redundant_ik" as RedundantIK <<C++ library>> {
+  +solveRedundantVelocityIk(jacobian, twist, joints, limits, secondary, options): RedundantIkResult
+  +minimumSingularValue(jacobian): double
+  +normalizedUpwardSlope(start, end): double
+  +upwardSegmentPenalty(start, end, activation): double
+  +lowElbowPreferenceCost(start, elbow, target, weight): double
+  +projectIntoTaskNullspace(jacobian, preference): VectorXd
+  +removeOpposingSecondaryComponent(priority, candidate): VectorXd
+  +inwardJointLimitRecoveryVelocity(joints, limits, margins): VectorXd
+  .. orientation-first task hierarchy ..
+  .. J7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1 activation ..
+  .. per-joint saturation + residual fallback ..
+  .. singularity escape > compatible centering/visibility ..
+  .. per-joint hard/predictive margins ..
 }
 
 class "control_math" as ControlMath <<C++ library>> {
@@ -57,26 +82,35 @@ class "tf2_ros::Buffer" as Buffer
 class "rclcpp::SingleThreadedExecutor" as Executor
 class PoseStamped
 class TwistStamped
+class JointJog
 class JointTrajectory
 class Bool
 class Float64
+class Int8
 class JointState
 
 ViveMoveItServer --> ControlMath : all Cartesian math
+ViveMoveItServer --> RedundantIK : seven-joint velocity solve
 ViveMoveItServer --> Buffer : latest tool TF
 RealtimeSetup --> ViveMoveItServer : reads settings / sets status
 Executor o-- ViveMoveItServer : timers + latest-value callbacks
 PoseStamped --> ViveMoveItServer : head + hand input
 Bool --> ViveMoveItServer : arm/base gates
 Float64 --> ViveMoveItServer : gripper input
+Int8 --> ViveMoveItServer : Servo status
 JointState --> ViveMoveItServer : measured fingers
-ViveMoveItServer --> TwistStamped : Servo Cartesian command
+ViveMoveItServer --> TwistStamped : Cartesian action diagnostic
+ViveMoveItServer --> JointJog : Servo joint command
 ViveMoveItServer --> JointTrajectory : head/gripper commands
 
 note bottom of ViveMoveItServer
   One compiled process owns clutching and the 100 Hz pose loop.
+  Actual arm_3->arm_4 and arm_4->arm_5 slopes feed upward penalties;
+  arm_3->arm_4 also has a bounded low-elbow target.
+  Visibility yields near singularities and protected joint margins.
+  Servo joint-bound status triggers inward-only recovery and target rebasing.
   No Python motion node or separate pose bridge is in the arm path.
-  Deadman/timeout publishes repeated zero twists and requires re-clutch.
+  Deadman/timeout publishes repeated zero twist/joint commands and requires re-clutch.
 end note
 
 @enduml

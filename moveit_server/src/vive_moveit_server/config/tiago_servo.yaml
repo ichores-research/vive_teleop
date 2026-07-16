@@ -27,13 +27,21 @@ moveit_servo:
 
   incoming_command_timeout: 0.10
   num_outgoing_halt_msgs_to_publish: 4
+  # The C++ solver already redistributes around a constrained joint. If Servo's
+  # final guard still catches one joint, halt that joint only so the complete
+  # arm does not appear frozen while the recovery state moves it inward.
+  halt_all_joints_in_joint_mode: false
 
   lower_singularity_threshold: 17.0
   hard_stop_singularity_threshold: 30.0
-  joint_limit_margin: 0.10
+  joint_limit_margin: 0.08
   leaving_singularity_threshold_multiplier: 2.0
 
-  cartesian_command_in_topic: /servo_node/delta_twist_cmds
+  # The teleop node publishes /servo_node/delta_twist_cmds as the observable
+  # Cartesian action, resolves it with limit-aware redundant IK, and sends the
+  # physical joint velocity command below. Keep Servo's Cartesian subscriber
+  # isolated so its unweighted Humble solver cannot override the joint command.
+  cartesian_command_in_topic: /servo_node/cartesian_input_disabled
   joint_command_in_topic: /servo_node/delta_joint_cmds
   joint_topic: /joint_states
   status_topic: /servo_node/status
