@@ -2,10 +2,15 @@
 
 <h1>Vive Teleop</h1>
 
-<h3>VR teleoperation for the TIAGo mobile manipulator</h3>
+<h3>Immersive VR control for the TIAGo mobile manipulator</h3>
 
-<p>Look through the robot's camera, drive its base, guide its seven-axis arm,<br>
-and move its head using a Vive headset and controller.</p>
+<p>See through the robot's camera and control its arm, gripper, head, and mobile base with a Vive headset and controller.</p>
+
+<a href="docs/assets/putting-objects-into-container.gif">
+  <img src="docs/assets/putting-objects-into-container.gif" alt="An operator using Vive Teleop to pick up several objects and place them into a container" width="720">
+</a>
+
+<p><strong>End-to-end mobile manipulation:</strong> picking up several household objects and placing them into a container.</p>
 
 <p>
   <img src="https://img.shields.io/badge/ROS_2-Humble-22314E?style=flat-square&logo=ros" alt="ROS 2 Humble">
@@ -15,164 +20,160 @@ and move its head using a Vive headset and controller.</p>
   <img src="https://img.shields.io/badge/Runtime-Docker-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
 </p>
 
-<p><a href="#demo">See the demo</a> · <a href="#how-it-works">How it works</a> · <a href="docs/technical-guide.md">Technical documentation</a></p>
+<p><a href="#system-overview">System overview</a> · <a href="#control-design">Control design</a> · <a href="#running-the-project">Run it</a> · <a href="docs/technical-guide.md">Technical guide</a></p>
 
 </div>
 
-## Demo
+## What it does
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/assets/arm-teleop-demo.gif">
-        <img src="docs/assets/arm-teleop-demo.gif" alt="Operator moving the TIAGo arm with a Vive controller" width="320">
-      </a>
-    </td>
-    <td align="center" width="50%">
-      <a href="docs/assets/head-teleop-demo.gif">
-        <img src="docs/assets/head-teleop-demo.gif" alt="TIAGo matching the operator's headset movement" width="320">
-      </a>
-    </td>
-  </tr>
-  <tr>
-    <td align="center"><strong>6-DoF arm teleoperation</strong><br>The robot wrist follows clutch-relative controller movement.</td>
-    <td align="center"><strong>Natural head control</strong><br>The robot mirrors headset pan and tilt in real time.</td>
-  </tr>
-</table>
-
-<p align="center"><sub>Click either preview to open the GIF at full size.</sub></p>
-
-## The project
-
-Vive Teleop turns a consumer VR system into an immersive robot-control station.
-The operator sees the TIAGo camera feed inside the headset and controls the head,
-arm, and gripper through familiar physical gestures—without a separate control
-panel interrupting the task.
+Vive Teleop turns consumer VR hardware into a direct robot-control station. The
+operator receives the TIAGo camera feed inside the headset and controls the
+robot through physical motion rather than a separate desktop interface.
 
 | Operator input | Robot response |
 | --- | --- |
 | Turn or tilt the headset | Pan or tilt the robot head |
-| Move the right controller while holding the deadman | Move and rotate the robot wrist, with controller top mapped to tool top |
-| Swipe the controller trackpad or joystick without clicking | Open or close the gripper |
-| Hold the trackpad/joystick click and push in any direction | Drive and steer the differential base continuously |
+| Move the right controller while holding the deadman | Translate and rotate the robot wrist |
+| Swipe the controller input without clicking | Open or close the gripper |
+| Hold the controller click and push in a direction | Drive and steer the mobile base |
 | Release the deadman | Stop arm pursuit and clear the active target |
 
-## How it works
+The clutch-relative mapping anchors each control interval at the current robot
+pose. Pressing the deadman therefore does not pull the arm toward an old target,
+and the operator can release, reposition, and continue naturally.
+
+## System overview
 
 ```mermaid
 flowchart LR
     O["Operator<br/>Vive headset + controller"]
     U["Unity VR client"]
     W["WebRTC gateway"]
-    T["C++ ROS 2 teleop<br/>100 Hz Cartesian control<br/>orientation-first 7-DOF IK"]
+    C["C++ ROS 2 controller<br/>100 Hz pose loop"]
     S["MoveIt Servo"]
-    R["TIAGo<br/>head · arm · gripper · base · camera"]
+    R["TIAGo<br/>camera · head · arm · gripper · base"]
 
     O -->|head and hand motion| U
-    U -->|pose + deadman + gripper + base<br/>WebRTC data channel| W
-    W -->|typed /vive/* topics| T
-    T -->|limit-aware 7-joint velocity| S
-    T -->|head + gripper trajectories<br/>guarded base velocity| R
-    S -->|7-joint arm trajectory| R
-    R -->|camera + live robot state| W
-    R -->|joint state + TF| T
-    W -->|live video| U
+    U -->|poses + controls| W
+    W -->|typed ROS 2 topics| C
+    C -->|seven-joint velocity command| S
+    C -->|head, gripper, and base commands| R
+    S -->|arm trajectory| R
+    R -->|joint state + TF| C
+    R -->|live camera| W
+    W -->|WebRTC video| U
 
     classDef human fill:#6C63FF,color:#fff,stroke:#4B44C4
-    classDef client fill:#00A8A8,color:#fff,stroke:#007878
+    classDef software fill:#007F86,color:#fff,stroke:#00585D
     classDef robot fill:#F28C28,color:#fff,stroke:#B85E00
     class O human
-    class U,W,T,S client
+    class U,W,C,S software
     class R robot
 ```
 
-The control path separates transport from robot motion. WebRTC carries video and
-controller data across the network; the gateway converts input into typed ROS 2
-messages; the C++ controller closes the wrist pose loop from live TF at 100 Hz
-and resolves it with prioritized, orientation-first 7-DOF IK; MoveIt Servo
-validates and smooths the resulting joint command before publishing the arm
-trajectory.
+WebRTC keeps video transport and operator input independent from the robot
+controller. The ROS 2 node closes the wrist pose loop from live TF, resolves
+the Cartesian request into a seven-joint velocity command, and passes it to
+MoveIt Servo for final smoothing and limit enforcement.
 
-### Arm command lifecycle
+### Control lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
     Idle --> Anchored: deadman pressed
-    Anchored --> Tracking: wrist TF and controller pose are available
-    Tracking --> Tracking: newest 6-DoF target replaces the last
-    Tracking --> Halted: deadman released or input times out
-    Halted --> Idle: target cleared and zero twist/joint commands sent
+    Anchored --> Tracking: controller pose and wrist TF available
+    Tracking --> Tracking: newest 6-DoF target replaces the previous target
+    Tracking --> Halted: deadman released or input becomes stale
+    Halted --> Idle: target cleared and zero commands published
 ```
 
-Each press anchors the controller's configured top frame to the robot's current
-tool frame, so engaging control does not cause a jump. Local controller
-orientation changes are applied in the tool's local frame while translation
-remains robot-base aligned. Tracking uses the headset frame captured at that
-moment, allowing the operator to keep looking around without steering the arm.
+## Control design
 
-## Engineering highlights
+- **Responsive 6-DoF following:** a 100 Hz C++ loop combines pose feedback,
+  target-velocity feed-forward, a 20 Hz target filter, and explicit Cartesian
+  speed and acceleration limits.
+- **Dexterity-aware arm motion:** orientation is prioritized over translation,
+  wrist joints receive the lowest motion costs, and constrained joints hand
+  unresolved motion to the remaining arm joints.
+- **Camera-aware posture:** a bounded low-elbow objective and upward-link
+  penalties keep the middle of the arm out of the operator's view without
+  continuously driving the elbow toward a joint limit.
+- **Limit and singularity handling:** predictive joint margins, adaptive
+  damping, null-space escape, inward-only recovery, and target anti-windup keep
+  the controller responsive near difficult configurations.
+- **Independent control paths:** head, arm, gripper, and base inputs have their
+  own deadman and timeout behavior, so unrelated controls do not block one
+  another.
+- **Field-network transport:** WebRTC provides low-latency video and controller
+  messaging, with Coturn available when direct peer connectivity is not
+  possible.
 
-- Bidirectional WebRTC: live robot video in one direction and VR input in
-  the other, with a TURN relay for the field-network setup.
-- Clutch-relative 6-DoF control: controller translation and rotation are mapped
-  from a fresh robot pose rather than an old absolute target, with explicit
-  controller-top alignment and tracked-origin offset calibration.
-- Real-time-oriented C++ arm loop: 100 Hz latest-value pose feedback,
-  fast target-velocity feed-forward, a 20 Hz target filter, responsive
-  Cartesian gains and bounded acceleration, stale-input/TF watchdogs, memory
-  locking, and `SCHED_FIFO` scheduling.
-- Dexterity-first redundant IK: orientation is solved before translation and
-  joints activate in the order 7 → 6 → 5 → 3 → 2 → 4 → 1. A constrained
-  preferred joint hands residual motion to the next joint instead of slowing
-  the whole arm. Null-space centering and manipulability escape avoid trapped
-  wrist configurations, while actual-link upward penalties plus a bounded
-  low-elbow target keep the middle arm from filling the head-camera view.
-- Layered motion handling: deadman release, stale-input timeout, workspace bounds,
-  predictive joint margins (at least `0.24 rad` for joints 5-7), adaptive
-  damping, target anti-windup, inward joint recovery, Servo smoothing/final
-  limits, and immediate target clear.
-- Independent head, arm, gripper, and base paths: each control can stay responsive
-  without coupling unrelated operator movement.
-- Containerized deployment: Dockerized ROS 2 services, automated runtime checks,
-  timestamped logs, and a browser client for debugging without VR hardware.
-- Opt-in rosbag2 datasets: MCAP capture records the head RGB view, robot
-  motion, effective robot commands, and a deadman label for every camera frame.
-  Other operator inputs are rejected by recorder configuration validation.
+## Technology
 
-### Record a dataset
+| Layer | Implementation |
+| --- | --- |
+| VR client | Unity 6, SteamVR, OpenVR controller tracking |
+| Media and input transport | WebRTC data channels and video, Coturn relay |
+| Robot integration | ROS 2 Humble, TF2, typed command and state topics |
+| Arm control | C++ resolved-rate IK and MoveIt Servo |
+| Deployment | Docker Compose with wired and Wi-Fi configurations |
 
-Dataset recording is off by default. Set `VIVE_TELEOP_RECORD_DATASET=1` before
-starting the normal Wi-Fi launcher:
+## Running the project
+
+The intended setup is an Ubuntu workstation with Docker Compose, Unity 6,
+SteamVR, a Vive headset/controller, and network access to a TIAGo running the
+expected ROS 2 interfaces.
+
+Start the normal Wi-Fi workflow with:
 
 ```bash
-VIVE_TELEOP_RECORD_DATASET=1 ./scripts/start-vive-teleop.sh
+./scripts/start-vive-teleop.sh
 ```
 
-The default `deadman_window` mode records bootstrap context, each deadman-active
-window, and 0.75 seconds of post-roll. Bags and their `manifest.json` and
-`events.jsonl` indexes are written below `recordings/<session-id>/`. Set
-`VIVE_TELEOP_RECORDING_MODE=continuous_session` when an entire session is
-required. Never replay these bags without isolating or remapping their command
-topics from the live robot ROS domain.
+The launcher brings up the ROS 2 and WebRTC services, validates the live robot
+interfaces, starts SteamVR when necessary, and opens the Unity client. Detailed
+configuration, network setup, controls, and troubleshooting are documented in
+the [technical guide](docs/technical-guide.md).
 
-## Safety scope
+Run non-hardware checks with:
 
-This is a supervised research prototype, not a safety-certified robot-control
-product. The current experimental Servo profile disables collision checking and
-must be used only with the lab's physical emergency-stop and operating
-procedure. Signaling and command ingress also assume a trusted, isolated
-network; do not expose them directly to the internet.
-The base path enforces a deadman, limits, and a timeout, but it does not add an
-obstacle collision monitor; maintain line of sight and clear operating space.
+```bash
+./scripts/test-software.sh --static
+```
 
-## Explore the implementation
+## Additional demos
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/assets/arm-teleop-demo.gif">
+        <img src="docs/assets/arm-teleop-demo.gif" alt="Operator moving the TIAGo arm with a Vive controller" width="280">
+      </a>
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/assets/head-teleop-demo.gif">
+        <img src="docs/assets/head-teleop-demo.gif" alt="TIAGo matching the operator's headset movement" width="280">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>6-DoF arm control</strong></td>
+    <td align="center"><strong>Headset-driven head control</strong></td>
+  </tr>
+</table>
+
+## Safety
+
+This is a supervised research prototype, not a safety-certified control
+product. The current experimental Servo profile does not perform collision
+checking. Operate only with the robot's physical emergency stop available,
+maintain line of sight, keep the workspace clear, and use a trusted isolated
+network.
+
+## Documentation
 
 - [Technical guide](docs/technical-guide.md) — setup, operation, configuration,
-  networking, API behavior, and troubleshooting.
-- [Architecture diagrams](docs/architecture/README.md) — deployment, component,
-  communication, and class-level views with PlantUML sources.
-- [Project documentation](docs/README.md) — documentation index and future dataset
-  recording design.
-- [Engineering audit](docs/audit-2026-06-28/README.md) — prioritized safety,
-  testing, recording, and portfolio roadmap plus the low-risk fix report.
+  networking, control behavior, and troubleshooting.
+- [Architecture](docs/architecture/README.md) — deployment, components,
+  communication paths, and class-level diagrams.
