@@ -199,9 +199,14 @@ The implementation must ensure:
 - Event publication occurs before the corresponding pause.
 - The final writer stop is called exactly once.
 
-A multi-threaded executor plus a dedicated recorder lifecycle thread is a
-reasonable starting point. Protect state with a narrow mutex or post all
-transitions onto one mutually exclusive callback group.
+The implemented model uses a multi-threaded controller executor and a dedicated
+single-threaded executor for the embedded rosbag2 node. Humble's
+`Recorder::record()` initializes recording and returns; the dedicated thread
+must spin the recorder node rather than treating that return as writer exit.
+During shutdown the recorder executor remains alive long enough to consume
+terminal event messages, then it is cancelled and joined before `stop()` closes
+the writer. Pause/resume/stop calls remain serialized by a narrow mutex, while
+state transitions use one mutually exclusive callback group.
 
 ### Proposed Parameters
 

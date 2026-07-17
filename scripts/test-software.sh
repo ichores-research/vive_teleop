@@ -62,6 +62,7 @@ if [[ "$run_ros" == "true" ]]; then
     ROS_FIELD_HOST_IP=192.0.2.20 \
     docker compose \
       --project-name "$compose_test_project" \
+      --profile recording \
       -f "$repo_dir/docker-compose.yml" \
       -f "$repo_dir/docker-compose.wifi.yml" \
       build
@@ -87,6 +88,14 @@ if [[ "$run_ros" == "true" ]]; then
     -v "$repo_dir/data_recorder/src:/recorder_ws/src:ro" \
     "$ros_test_image" \
     -lc 'apt-get update >/dev/null && apt-get install -y --no-install-recommends ros-humble-ament-cmake-gtest ros-humble-rosbag2 ros-humble-sensor-msgs ros-humble-tf2-msgs python3-colcon-common-extensions >/dev/null && source /opt/ros/humble/setup.bash && cd /recorder_ws && colcon build && colcon test --event-handlers console_direct+ && colcon test-result --verbose'
+
+  data_recorder_test_image="${compose_test_project}-data_recorder:latest"
+  if ! docker image inspect "$data_recorder_test_image" >/dev/null 2>&1; then
+    printf '%s\n' 'Could not resolve the built dataset recorder image.' >&2
+    exit 1
+  fi
+  DATA_RECORDER_TEST_IMAGE="$data_recorder_test_image" \
+    "$script_dir/test-data-recorder.sh"
 
   printf '%s\n' 'Software-only ROS tests passed.'
 fi

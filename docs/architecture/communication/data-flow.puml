@@ -11,9 +11,10 @@ participant "WebRTCServer\nwebrtc_server" as Server
 participant "ImageSubscriber\n+ VideoTrack" as Video
 participant "InputPublisher\nwebrtc_server" as Input
 participant "RobotInputState\nwebrtc_server" as Snapshot
-participant "C++ ViveMoveItServer\n100 Hz loop + hierarchical IK" as Teleop
+participant "C++ ViveMoveItServer\n100 Hz loop + prioritized IK" as Teleop
 participant "MoveIt Servo\njoint safety + smoothing" as Servo
 participant "Robot controllers" as Robot
+participant "Optional data_recorder\nMCAP" as Recorder
 
 == startup and state ==
 Client -> Server : GET /config
@@ -46,9 +47,13 @@ Teleop -> Robot : guarded /key_vel Twist
 Robot -> Teleop : current arm_tool_link TF
 Teleop -> Teleop : top-frame clutch + filter\nfeedback/feed-forward + limits
 Teleop -> Teleop : publish mapped pose + effective gate\nfor diagnostics/recording
-Teleop -> Teleop : orientation-first 7-DOF IK\nJ7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1\nbounded residual fallback + wrist margins
+Teleop -> Teleop : orientation-first 7-DOF IK\nweighted preference J7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1\nprogressive subset + per-joint bounds
 Teleop -> Servo : /servo_node/delta_joint_cmds\nphysical joint speed_units
 Servo -> Robot : /arm_controller/joint_trajectory
+Robot -> Recorder : selected camera/state/controller streams
+Input -> Recorder : /vive/hand_target_active only
+Teleop -> Recorder : target/gate/twist/joint command streams
+Recorder -> Recorder : events + frame labels + manifest
 
 == halt ==
 Client -> Server : wristCommandEnabled=false or stream stops

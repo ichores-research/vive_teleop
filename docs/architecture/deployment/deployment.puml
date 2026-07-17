@@ -17,8 +17,11 @@ node "Docker / host-network runtime" as Docker {
   node "webrtc_server_wifi\nport 8088" as WebRtcServer
   node "moveit_server_wifi" as MoveItServer
   node "coturn_wifi\nUDP/TCP 3478" as Coturn
+  node "data_recorder_wifi\nopt-in" as Recorder
   artifact "/tmp/cyclonedds.xml" as CycloneConfig
 }
+
+database "MCAP recording root" as Dataset
 
 node "Robot network" as RobotNetwork {
   node "TIAGo robot\n10.68.0.1\nROS_DOMAIN_ID=67" as Robot {
@@ -38,6 +41,8 @@ UnityPlayer --> Logs : unity-player.log
 WebRtcServer --> Logs : webrtc_server_wifi.log
 MoveItServer --> Logs : moveit_server_wifi.log
 Coturn --> Logs : coturn_wifi.log
+Recorder --> Logs : data_recorder_wifi.log
+Recorder --> Dataset : session manifest + MCAP
 
 UnityPlayer --> WebRtcServer : HTTP/WebRTC\n/config /offer /input_offer\nport 8088
 Browser --> WebRtcServer : HTTP/WebRTC\n/config /robot_state /offer /input_offer
@@ -46,8 +51,10 @@ Browser .. Coturn : ICE TURN candidates
 
 WebRtcServer --> Robot : ROS 2 DDS\ncamera, joint states, TF
 MoveItServer --> Robot : ROS 2 DDS\njoint states, TF, controllers
+Recorder <-- Robot : selected ROS 2 observations,\ncommands, state, and feedback
 CycloneConfig --> WebRtcServer : discovery peer + interface
 CycloneConfig --> MoveItServer : discovery peer + interface
+CycloneConfig --> Recorder : discovery peer + interface
 
 Camera --> WebRtcServer : image frames
 JointStates --> WebRtcServer : head/gripper state
@@ -61,7 +68,9 @@ MoveItServer --> GripperController : gripper trajectory
 note bottom of Docker
   Wi-Fi mode uses host networking.
   Field mode uses docker-compose.yml ipvlan addresses:
-  webrtc_server=10.68.0.132, coturn=10.68.0.133, moveit_server=10.68.0.134.
+  webrtc_server=10.68.0.132, coturn=10.68.0.133,
+  moveit_server=10.68.0.134, data_recorder=10.68.0.135.
+  The recorder is started only when explicitly enabled.
 end note
 
 @enduml

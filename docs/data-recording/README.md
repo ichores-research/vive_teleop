@@ -1,4 +1,4 @@
-# Future Teleoperation Dataset Recorder
+# Teleoperation Dataset Recorder
 
 ## Status
 
@@ -8,6 +8,9 @@ modes, watchdog/post-roll handling, typed events, per-camera-frame deadman
 labels, a manifest/event index, and opt-in Compose integration. The offline
 validator/exporter and live-robot topic/QoS inventory are still pending, so a
 hardware session must be inspected before treating a bag as production-valid.
+The ROS software suite runs a synthetic deadman-window session, decodes the
+recorded RGB images from MCAP, and verifies camera calibration, matching frame
+labels, terminal events, clean shutdown, and the finalized manifest.
 
 The implemented privacy boundary is stricter than the earlier provenance
 proposal: `/vive/hand_target_active` is the only operator-input topic allowed in
@@ -23,7 +26,7 @@ state or camera data.
 
 ## Purpose
 
-The future subsystem will record demonstrations for machine learning while
+The subsystem records demonstrations for machine learning while
 keeping data capture isolated from robot control. The target dataset must answer
 four questions:
 
@@ -34,7 +37,7 @@ four questions:
 
 Raw operator/controller motion is useful provenance but is not the primary
 training action. The primary label should be the robot-space action at the same
-interface the future policy will control.
+interface a future policy will control.
 
 ## Decisions
 
@@ -55,16 +58,17 @@ interface the future policy will control.
 
 ## Documents
 
-- `architecture-and-lifecycle.md`: proposed deployment, states, trigger logic,
+- `architecture-and-lifecycle.md`: deployment, states, trigger logic,
   failure isolation, startup, shutdown, and operational modes.
-- `dataset-contract.md`: exact current topic chain, proposed topic whitelist,
+- `dataset-contract.md`: exact current topic chain, dataset contract,
   ML sample definition, identity, time alignment, metadata, and storage layout.
 - `implementation-plan.md`: phased code/config changes with target repository
   paths and Humble-specific implementation constraints.
 - `validation-plan.md`: unit, integration, replay, storage, timing, and dataset
   acceptance tests.
-- `.agents/data-recorder-context.md`: condensed implementation context for
-  future coding agents.
+
+The code and `config/recorder.yaml` are authoritative when older design details
+below this index disagree with the implemented topic whitelist or lifecycle.
 
 ## External References
 

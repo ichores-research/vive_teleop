@@ -2,7 +2,7 @@
 !pragma layout smetana
 title component - ROS topic boundary
 
-left to right direction
+top to bottom direction
 skinparam componentStyle rectangle
 skinparam shadowing false
 skinparam defaultFontName Monospace
@@ -14,6 +14,8 @@ component "moveit_server\nC++ ViveMoveItServer\n100 Hz Cartesian loop\nprioritiz
 component "MoveIt Servo\njoint safety + smoothing" as Servo
 component "TIAGo controllers" as Controllers
 component "Robot sensors/state" as Sensors
+component "data_recorder\nopt-in observational rosbag2" as Recorder
+database "MCAP" as Mcap
 
 Clients --> InputPublisher : WebRTC data-channel JSON
 
@@ -35,9 +37,16 @@ Teleop --> Teleop : /servo_node/pose_target_cmds\n/servo_node/pose_target_active
 Teleop --> Servo : /servo_node/delta_joint_cmds\nJointJog speed_units
 Servo --> Controllers : /arm_controller/joint_trajectory
 
+Sensors --> Recorder : camera, joint states, TF, odometry
+InputPublisher --> Recorder : /vive/hand_target_active only
+Teleop --> Recorder : pose target/gate, twist, JointJog,\nhead/gripper/base commands
+Controllers --> Recorder : controller states and trajectories
+Recorder --> Mcap : events + frame labels + selected topics
+
 note bottom
   This view shows the narrow ROS contract between the WebRTC gateway
   and robot command generation without internal implementation detail.
+  The recorder subscribes only and never gates the control path.
 end note
 
 @enduml
