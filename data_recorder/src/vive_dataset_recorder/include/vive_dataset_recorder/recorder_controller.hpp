@@ -2,6 +2,7 @@
 
 #include "vive_dataset_recorder/recorder_state_machine.hpp"
 
+#include <rclcpp/executors/single_threaded_executor.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rosbag2_transport/recorder.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -31,9 +32,6 @@ public:
       const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
   ~RecorderController() override;
 
-  std::shared_ptr<rosbag2_transport::Recorder> recorder_node() const {
-    return recorder_;
-  }
   void start();
   void stop(const std::string &reason);
 
@@ -81,9 +79,11 @@ private:
   std::ofstream events_stream_;
   std::unique_ptr<RecorderStateMachine> state_machine_;
   std::shared_ptr<rosbag2_transport::Recorder> recorder_;
-  std::thread recorder_thread_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor>
+      recorder_executor_;
+  std::thread recorder_executor_thread_;
   std::mutex recorder_api_mutex_;
-  std::atomic<bool> recorder_thread_finished_{false};
+  std::atomic<bool> recorder_executor_finished_{false};
   std::atomic<bool> stopping_{false};
   std::string recorder_error_;
 

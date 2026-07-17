@@ -17,10 +17,10 @@ The script:
 
 1. Detects the Wi-Fi and robot-facing Ethernet addresses.
 2. Rebuilds the Unity Linux player when its sources or project settings changed.
-3. Builds and starts `webrtc_server_wifi`, `moveit_server_wifi`, and `coturn_wifi`.
+3. Builds and starts `webrtc_server_wifi`, `moveit_server_wifi`, and `coturn_wifi`; `data_recorder_wifi` is included only when `VIVE_TELEOP_RECORD_DATASET=1`.
 4. Waits for `http://<wifi-ip>:8088/config`.
 5. Waits for the robot camera, wrist TF, joint states, and gripper state.
-6. Verifies the C++ arm-loop rate, Cartesian speed/acceleration caps, controller-top calibration, orientation-first IK model/joint hierarchy/fallback-speed floor/wrist margins/middle-arm visibility objective, real-time scheduling/memory locking, deadman halt gate, Servo's final joint-limit scaling, and the complete seven-joint `arm` MoveIt group.
+6. Verifies the C++ arm-loop rate, Cartesian speed/acceleration caps, controller-top calibration, orientation-first IK model/joint-weight order/fallback-speed floor/per-joint margins/middle-arm visibility objective, recovery and anti-windup settings, real-time scheduling/memory locking, deadman halt gate, Servo's final joint-limit scaling, and the complete seven-joint `arm` MoveIt group.
 7. Starts SteamVR through Steam if it is not already running.
 8. Runs the Unity player in the foreground with controller recording enabled.
 
@@ -28,7 +28,7 @@ Use `Ctrl+C` in that terminal to stop the Unity player. Stop the containers with
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.wifi.yml stop \
-  webrtc_server_wifi moveit_server_wifi coturn_wifi
+  webrtc_server_wifi moveit_server_wifi data_recorder_wifi coturn_wifi
 ```
 
 SteamVR is managed separately by Steam and can be closed from the SteamVR window.
@@ -95,12 +95,13 @@ and validate both the seven-joint hierarchical IK and Servo configuration.
 
 ## Architecture
 
-The current system has four main pieces:
+The current system has four always-on pieces and one opt-in service:
 
 - `webrtc_server`: ROS2 Humble application. It subscribes directly to the robot's `/head_front_camera/rgb/image_raw` topic, runs the WebRTC HTTP signaling server, serves camera video on `/offer`, and accepts data-channel input on `/input_offer`.
 - `moveit_server`: ROS2 teleoperation node. It converts raw HMD orientation into head trajectories, resolves wrist pose targets with local prioritized orientation-first 7-DOF IK, sends joint velocities through MoveIt Servo, and publishes direct two-finger gripper trajectories.
 - `coturn`: TURN relay used by WebRTC peers in the current network setup.
 - `index.html` / `unity-vr-headset`: WebRTC clients. The browser page is for debugging; Unity is the VR client.
+- `data_recorder`: an observational embedded-rosbag2 service that writes MCAP datasets when explicitly enabled.
 
 The WebRTC server code is separated from ROS subscriber/publisher logic:
 
@@ -238,7 +239,8 @@ The relevant files are:
 - A steady-clock wall timer runs the Cartesian loop at 100 Hz. Its fast-follow profile filters new targets at `20 Hz`, estimates target velocity with a `0.55` feed-forward filter alpha, computes residual pose error from nonblocking latest TF, and emits physical linear/angular velocity on `/servo_node/delta_twist_cmds`.
 - Linear and angular feedback gains are `7.0` and `4.0`. Vector norms are capped at `0.45 m/s` and `1.6 rad/s`; command slew is capped at `4.0 m/s²` and `10.0 rad/s²`. The arm can therefore reach either Cartesian cap in roughly `0.11-0.16 s`, while the explicit acceleration bounds remain active before Servo.
 - The node builds a live KDL chain from `base_footprint` to `arm_tool_link`. It uses the torso position for kinematics but selects only `arm_1_joint` through `arm_7_joint` as controllable columns.
-- Hierarchical IK solves angular velocity first, then solves translation only in the exact angular-task null space. A translation request therefore cannot cancel an achievable controller rotation. Separately, ascending motion cost admits joints in the strict order 7 → 6 → 5 → 3 → 2 → 4 → 1. A tool-axis roll that joint 7 can achieve by itself therefore leaves every other joint still; more joints enter only while task residual remains.
+- Hierarchical IK solves angular velocity first, then solves translation only in the exact angular-task null space. A translation request therefore cannot cancel an achievable controller rotation. Separately, ascending motion weights prefer joints in the order 7 → 6 → 5 → 3 → 2 → 4 → 1 and progressively admit larger subsets when needed.
+- The per-joint order is currently a soft preference, not a strict lexicographic guarantee. The solver derives its required prefix from the combined Cartesian and secondary posture vector; visibility or singularity terms can therefore admit all seven joints. The weighted re-solve may then redistribute a tool-roll command away from joint 7. Existing pure-roll unit coverage does not include this runtime-shaped secondary input. A strict fix must choose the prefix from the Cartesian task, preserve or saturate earlier joint levels while solving residual motion, and apply compatible secondary motion afterward.
 - Each selected joint has an asymmetric velocity bound derived from 95% of its URDF velocity limit and the distance to its predictive position margin. The remaining 5% is local headroom before Servo's final physical check. When a preferred joint reaches either bound, only that joint saturates; the unresolved Cartesian velocity is re-solved through the next priority levels. This avoids the former behavior where one wrist joint could scale the entire command despite available shoulder/elbow motion.
 - Limit avoidance overrides the activation preference. The protected bands for joints 1-7 are `[0.14, 0.18, 0.14, 0.20, 0.24, 0.24, 0.24] rad`, materially inside Servo's final `0.08 rad` guard. Barrier weights begin steering motion away before the band. At or inside it, outward velocity is zero while recovery velocity remains available; the bounded solver uses fallback joints for the residual. A `0.45 s` lookahead supplies braking headroom for Servo filtering and measured-state latency without reducing speed away from a boundary.
 - A projected null-space objective recenters joints without changing achievable orientation or translation. Near low manipulability, adaptive damping and a finite-difference manipulability gradient move the spare degree of freedom away from the singular configuration. Caller-supplied singularity escape outranks routine centering: any opposing centering component is removed before the secondary command is applied.
@@ -287,7 +289,7 @@ settings live in `config/tiago_servo.yaml`.
 - `arm_halt_command_count` and `require_deadman_repress_after_timeout` define halt/rearm behavior.
 - `ik_damping_threshold` and `ik_maximum_damping` control the smooth singularity response. `ik_singularity_avoidance_threshold`, `ik_singularity_escape_velocity_radps`, and `ik_singularity_gradient_step_rad` control null-space manipulability escape.
 - `ik_visibility_avoidance_enabled` enables the camera-clear posture objective. `ik_visibility_link_names` defaults to `[arm_3_link, arm_4_link, arm_5_link]`; consecutive pairs define the two scored middle-arm segments. `ik_visibility_upward_activation_ratio`, `ik_visibility_avoidance_velocity_radps`, and `ik_visibility_gradient_step_rad` set its upward-penalty threshold, maximum correction, and numerical-gradient step. `ik_visibility_low_elbow_target_slope` defines low enough and `ik_visibility_low_elbow_reward_weight` is the actual bounded correction gain. The singularity and joint-margin disable/full thresholds smoothly suspend visibility before it can oppose safety recovery. Startup requires `ik_visibility_model_ready=true` and a positive bounded low-elbow preference.
-- `ik_joint_motion_weights` is ordered arm joint 1 through 7. Ascending cost defines activation order; the default `[12, 3, 2, 4, 1, 0.5, 0.25]` enforces 7 → 6 → 5 → 3 → 2 → 4 → 1. The runtime check rejects any other ordering.
+- `ik_joint_motion_weights` is ordered arm joint 1 through 7. The default `[12, 3, 2, 4, 1, 0.5, 0.25]` configures the preference 7 → 6 → 5 → 3 → 2 → 4 → 1. The runtime check rejects any other ordering, but does not prove strict runtime joint use.
 - `ik_joint_limit_activation_ratio`, `ik_joint_limit_weight`, and `ik_joint_centering_gain_radps` start redistributing motion before a joint is trapped at its bound. `ik_joint_limit_margins_rad` defines the hard per-joint bands and must remain larger than Servo's final margin; joints 5-7 retain at least `0.24 rad`. The scalar `ik_joint_limit_margin_rad` is only a solver fallback when no vector is supplied. `ik_joint_limit_lookahead_sec` converts remaining distance into an asymmetric per-joint velocity bound. `joint_limit_recovery_*` configures the status-triggered inward-only recovery state.
 - `ik_unreachable_linear_residual_mps` and `ik_unreachable_timeout_sec` configure the persistent-residual anti-windup rebase. Short transients do not trigger it.
 - `ik_joint_velocity_scale` defaults to `0.95`, allowing each joint to use 95% of its URDF velocity limit before its residual falls through to the next priority. Runtime validation retains the `0.75` minimum so a deliberately slower commissioning profile remains possible. Servo still applies the final physical velocity and position limits.
@@ -355,7 +357,7 @@ is moving the posture. `Middle-arm visibility bias safety-scaled ...` means
 singularity or protected joint clearance is taking priority.
 `Blocked ...` means outward velocity at a protected boundary was forced to
 zero. `Prioritized IK residual after all available fallbacks ...` is the
-important slowdown warning: even the full hierarchy cannot realize that
+important slowdown warning: even the full joint set cannot realize that
 Cartesian command within current bounds. Move in the recovery direction or
 release and re-clutch from a more central arm posture if that warning persists.
 Persistent cases now rebase automatically. `Joint-limit recovery active ...`
@@ -582,18 +584,37 @@ player log automatically:
 ./scripts/run-unity-vr-linux.sh
 ```
 
-### Planned synchronized ML dataset recording
+### Synchronized ML dataset recording
 
-A separate ROS 2/rosbag2 dataset recorder is designed but not implemented. The
-plan records selected camera, robot state, robot-space action, command, outcome,
-and episode-event streams while the wrist deadman is active, with a short
-terminal post-roll. The downstream Servo gate remains a separate effective
-action-validity label. Raw Unity controller data remains optional provenance
-rather than the primary training action.
+An opt-in ROS 2 recorder embeds the Humble rosbag2 API and writes MCAP. It can
+capture deadman-delimited windows with a `0.75 s` post-roll or a continuous
+session, and emits recorder events, camera-frame deadman labels, and a session
+manifest. The whitelist includes the head RGB camera, joint/TF/odometry state,
+controller feedback, mapped pose target, effective Servo gate, generated twist
+and joint commands, controller trajectories, and base outputs. It deliberately
+excludes raw operator input except `/vive/hand_target_active`.
 
-The implementation, topic contract, storage layout, and validation plan are in
-[`data-recording/`](data-recording/README.md). The current Unity JSONL
-recording remains the only implemented recording feature.
+Camera capture is independent of WebRTC: rosbag2 stores the original
+`sensor_msgs/Image` stream from `/head_front_camera/rgb/image_raw` plus
+`CameraInfo` calibration directly in MCAP. It does not record the encoded
+WebRTC stream. Every received image also produces a deadman-frame label carrying
+the same source header for offline matching.
+
+Enable it before startup:
+
+```bash
+VIVE_TELEOP_RECORD_DATASET=1 \
+VIVE_TELEOP_RECORDING_ROOT=/path/to/dataset-root \
+./scripts/start-vive-teleop.sh
+```
+
+`VIVE_TELEOP_RECORDING_MODE` accepts `deadman_window` (default) or
+`continuous_session`. The recorder is observational: storage failure must not
+gate teleoperation, and command-bearing bags must never be replayed on the
+robot ROS domain. Live-robot topic/QoS inventory, bag inspection, and the
+offline validation/export path are still required before production dataset
+use. Unity JSONL recording remains a separate, unsynchronized operator-side
+debug feature.
 
 Builds can override the scene URL with either `VIVE_TELEOP_WEBRTC_CONFIG_URL` or a command-line argument:
 
@@ -638,8 +659,8 @@ docker exec moveit_server_wifi bash -lc \
 The runtime check also verifies the C++ loop rate, positive Cartesian
 speed/acceleration caps, controller-top parameter shape, active
 `SCHED_FIFO`/memory locking, the deadman queue-clear gate, a ready hierarchical-IK
-KDL model with orientation-first task priority, the strict
-7 → 6 → 5 → 3 → 2 → 4 → 1 joint hierarchy, a fallback-speed floor,
+KDL model with orientation-first task priority, the configured
+7 → 6 → 5 → 3 → 2 → 4 → 1 joint-weight preference, a fallback-speed floor,
 damping/null-space behavior, a bounded safety-gated low-elbow objective,
 per-joint braking margins, status-triggered inward recovery, target anti-windup,
 Servo's final automatic joint-limit scaling and per-joint halt mode, all seven

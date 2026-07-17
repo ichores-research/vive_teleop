@@ -2,7 +2,7 @@
 !pragma layout smetana
 title component overview - project communication
 
-left to right direction
+top to bottom direction
 skinparam componentStyle rectangle
 skinparam shadowing false
 skinparam defaultFontName Monospace
@@ -15,7 +15,9 @@ component "webrtc_server\nWebRTC gateway" as WebRtcServer
 component "moveit_server\nteleop control" as MoveItServer
 component "TIAGo robot\nROS 2 graph" as Robot
 component "coturn\nTURN relay" as Coturn
+component "data_recorder\nopt-in MCAP capture" as Recorder
 database "logs/<timestamp>" as Logs
+database "MCAP session" as Dataset
 
 Unity --> WebRtcServer : HTTP config/signaling\nWebRTC video + input
 Browser --> WebRtcServer : HTTP config/state/signaling\nWebRTC video + input
@@ -27,11 +29,16 @@ Robot --> WebRtcServer : camera, joint states, TF
 Robot --> MoveItServer : joint states, TF, robot model
 MoveItServer --> Robot : head, arm, gripper trajectories
 MoveItServer --> Robot : guarded base Twist on /key_vel
+Robot --> Recorder : selected camera/state/controller topics
+MoveItServer --> Recorder : mapped target, effective gate,\ntwist and joint commands
+WebRtcServer --> Recorder : /vive/hand_target_active only
+Recorder --> Dataset : manifest + events + MCAP
 
 WebRtcServer --> Logs : webrtc_server_wifi.log
 MoveItServer --> Logs : moveit_server_wifi.log
 Coturn --> Logs : coturn_wifi.log
 Unity --> Logs : unity-player.log
+Recorder --> Logs : data_recorder_wifi.log
 
 note bottom of WebRtcServer
   JSON data-channel payloads become typed ROS 2 topics here.
@@ -40,6 +47,11 @@ end note
 note bottom of MoveItServer
   Deadman, timeouts, workspace limits, prioritized bounded 7-DOF IK,
   camera-clear null-space posture, base guard, Servo, and controller output live here.
+end note
+
+note bottom of Recorder
+  Started only with VIVE_TELEOP_RECORD_DATASET=1.
+  Observational; storage health never gates control.
 end note
 
 @enduml

@@ -34,4 +34,4 @@ COPY ros_entrypoint.sh /ros_entrypoint.sh
 RUN chmod +x /ros_entrypoint.sh
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
-CMD ["ros2", "run", "vive_dataset_recorder", "vive_dataset_recorder"]
+CMD ["/recorder_ws/install/vive_dataset_recorder/lib/vive_dataset_recorder/vive_dataset_recorder"]

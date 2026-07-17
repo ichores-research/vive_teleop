@@ -20,7 +20,7 @@ package "Input topics" {
 package "moveit_server container" {
   component "ViveMoveItServer\nC++ rclcpp" as Teleop
   component "100 Hz Cartesian loop\nfilter + feedback/feed-forward\nspeed/acceleration limits" as ArmLoop
-  component "Prioritized orientation-first 7-DOF IK\nJ7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1\nper-joint bounded fallback" as IK
+  component "Prioritized orientation-first 7-DOF IK\nweighted J7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1 preference\nprogressive subset + per-joint bounds" as IK
   component "MoveIt Servo component\nintra-process enabled\njoint safety + smoothing" as Servo
   component "move_group" as MoveGroup
   component "robot_state_publisher" as Rsp
@@ -84,8 +84,9 @@ note bottom of IK
   the elbow receives a bounded low-enough target.
   Both act in the safe Cartesian null space and yield near
   singularities or protected joint margins.
-  Constrained joints saturate locally; residual motion
-  falls through the hierarchy. Servo bound status triggers
+  Joint order is a soft weighted preference; secondary posture
+  terms can admit the full set and redistribute motion.
+  Constrained joints are locally bounded. Servo status triggers
   inward-only recovery and target rebasing.
 end note
 

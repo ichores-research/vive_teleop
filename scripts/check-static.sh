@@ -44,6 +44,7 @@ python3 - <<'PY'
 import ast
 import json
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 
 for root in (
@@ -64,6 +65,38 @@ for path in (
     Path("data_recorder/src/vive_dataset_recorder/package.xml"),
 ):
     ET.parse(path)
+
+recorder_config = Path(
+    "data_recorder/src/vive_dataset_recorder/config/recorder.yaml"
+).read_text(encoding="utf-8")
+camera_match = re.search(
+    r"^[ \t]+camera_topic:[ \t]+(\S+)[ \t]*$", recorder_config, re.MULTILINE
+)
+if camera_match is None:
+    raise ValueError("Recorder config is missing camera_topic")
+
+record_topics = set()
+record_topics_indent = None
+for line in recorder_config.splitlines():
+    stripped = line.strip()
+    indentation = len(line) - len(line.lstrip())
+    if record_topics_indent is None:
+        if stripped == "record_topics:":
+            record_topics_indent = indentation
+        continue
+    if not stripped or stripped.startswith("#"):
+        continue
+    if indentation <= record_topics_indent:
+        break
+    if stripped.startswith("- "):
+        record_topics.add(stripped[2:].strip())
+if record_topics_indent is None:
+    raise ValueError("Recorder config is missing record_topics")
+camera_topic = camera_match.group(1)
+if camera_topic not in record_topics:
+    raise ValueError(
+        f"Recorder camera_topic {camera_topic!r} is missing from record_topics"
+    )
 PY
 
 python3 scripts/check-markdown-links.py

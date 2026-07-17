@@ -95,10 +95,7 @@ services:
       - HOME=/tmp
       - ROS_LOG_DIR=/tmp/vive-dataset-recorder-logs
     command:
-      - ros2
-      - run
-      - vive_dataset_recorder
-      - vive_dataset_recorder
+      - /recorder_ws/install/vive_dataset_recorder/lib/vive_dataset_recorder/vive_dataset_recorder
       - --ros-args
       - --params-file
       - /recorder_ws/install/vive_dataset_recorder/share/vive_dataset_recorder/config/recorder.yaml

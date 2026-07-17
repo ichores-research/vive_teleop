@@ -157,7 +157,7 @@ void RecorderController::validate_configuration() {
     }
   }
   for (const auto &required_topic :
-       {capture_gate_topic_, frame_state_topic_, event_topic_}) {
+       {camera_topic_, capture_gate_topic_, frame_state_topic_, event_topic_}) {
     if (unique_topics.count(required_topic) == 0) {
       throw std::invalid_argument("record_topics is missing required topic " +
                                   required_topic);
@@ -217,20 +217,38 @@ void RecorderController::configure_rosbag() {
 }
 
 void RecorderController::start() {
-  if (recorder_thread_.joinable()) {
-    throw std::logic_error("recorder has already started");
-  }
   started_at_ = std::chrono::steady_clock::now();
   state_machine_->start();
   publish_status();
-  recorder_thread_ = std::thread([this]() {
-    try {
+
+  try {
+    {
+      std::lock_guard<std::mutex> lock(recorder_api_mutex_);
       recorder_->record();
+    }
+  } catch (const std::exception &error) {
+    recorder_error_ = error.what();
+    state_machine_->fail();
+    RCLCPP_ERROR(get_logger(), "rosbag2 recorder failed to start: %s",
+                 error.what());
+    throw;
+  }
+
+  // Humble's Recorder::record() initializes subscriptions and returns. Keep
+  // its node spinning independently so controller callbacks remain responsive
+  // while rosbag receives and writes high-bandwidth camera messages.
+  recorder_executor_ =
+      std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  recorder_executor_->add_node(recorder_);
+  recorder_executor_thread_ = std::thread([this]() {
+    try {
+      recorder_executor_->spin();
     } catch (const std::exception &error) {
       recorder_error_ = error.what();
-      RCLCPP_ERROR(get_logger(), "rosbag2 recorder failed: %s", error.what());
+      RCLCPP_ERROR(get_logger(), "rosbag2 recorder executor failed: %s",
+                   error.what());
     }
-    recorder_thread_finished_ = true;
+    recorder_executor_finished_ = true;
   });
 
   tick_timer_ =
@@ -246,9 +264,6 @@ void RecorderController::start() {
 
 void RecorderController::stop(const std::string &reason) {
   if (stopping_.exchange(true)) {
-    if (recorder_thread_.joinable()) {
-      recorder_thread_.join();
-    }
     return;
   }
   if (tick_timer_) {
@@ -272,14 +287,19 @@ void RecorderController::stop(const std::string &reason) {
   if (rclcpp::ok()) {
     rclcpp::sleep_for(50ms);
   }
+  // Let the still-running recorder executor consume the terminal events before
+  // preventing further callbacks and finalizing the MCAP writer.
+  if (recorder_executor_) {
+    recorder_executor_->cancel();
+  }
+  if (recorder_executor_thread_.joinable()) {
+    recorder_executor_thread_.join();
+  }
   {
     std::lock_guard<std::mutex> lock(recorder_api_mutex_);
     if (recorder_) {
       recorder_->stop();
     }
-  }
-  if (recorder_thread_.joinable()) {
-    recorder_thread_.join();
   }
   write_manifest(recorder_error_.empty() ? "complete" : "failed", reason);
   events_stream_.flush();
@@ -314,10 +334,10 @@ void RecorderController::on_static_tf(
 }
 
 void RecorderController::on_tick() {
-  if (recorder_thread_finished_ && !stopping_) {
+  if (recorder_executor_finished_ && !stopping_) {
     state_machine_->fail();
     publish_event(RecordingEvent::RECORDER_FAILURE,
-                  recorder_error_.empty() ? "writer_stopped_unexpectedly"
+                  recorder_error_.empty() ? "recorder_executor_stopped"
                                           : recorder_error_,
                   state_machine_->capture_window_id(),
                   state_machine_->action_segment_id());

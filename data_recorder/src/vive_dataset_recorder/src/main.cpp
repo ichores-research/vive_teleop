@@ -26,7 +26,6 @@ int main(int argc, char **argv) {
     auto executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(
         rclcpp::ExecutorOptions(), 4);
     executor->add_node(controller);
-    executor->add_node(controller->recorder_node());
     auto signal_monitor =
         std::make_shared<rclcpp::Node>("vive_dataset_recorder_signal_monitor");
     auto signal_timer = signal_monitor->create_wall_timer(50ms, [executor]() {

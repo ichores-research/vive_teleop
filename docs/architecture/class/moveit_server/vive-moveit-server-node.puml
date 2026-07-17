@@ -52,7 +52,7 @@ class "redundant_ik" as RedundantIK <<C++ library>> {
   +removeOpposingSecondaryComponent(priority, candidate): VectorXd
   +inwardJointLimitRecoveryVelocity(joints, limits, margins): VectorXd
   .. orientation-first task hierarchy ..
-  .. J7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1 activation ..
+  .. weighted J7 -> J6 -> J5 -> J3 -> J2 -> J4 -> J1 preference ..
   .. per-joint saturation + residual fallback ..
   .. singularity escape > compatible centering/visibility ..
   .. per-joint hard/predictive margins ..
